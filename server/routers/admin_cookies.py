@@ -725,15 +725,29 @@ def _do_get(domain: str) -> dict[str, Any]:
     root = cp._strip_sub(domain)
     if not cp.is_allowed(root):
         _log.info("[cookie_pool] get 拒绝非白名单域 domain=%s", domain)
-        return {"ok": True, "domain": root, "header": "", "ckey": ""}
+        return {"ok": True, "found": False, "domain": root,
+                "header": "", "ckey": "", "headers": []}
     header = cp.get_cookie(domain) or ""
     ckey = ""
     if root == "youku.com":
         # ckey 与 Cookie 同域存储（优酷 UPS 签名用），桌面端一起回读
         ckey = cp.get_ckey(domain) or ""
-    _log.info("[cookie_pool] get domain=%s hit=%s ckey=%s",
-              root, bool(header), bool(ckey))
-    return {"ok": True, "domain": root, "header": header, "ckey": ckey}
+    # 2026-10-28 修：原先只回 {ok, domain, header, ckey}，**没有 found**，而调用方
+    # （桌面端 _baidu_cloud_cookies）判的是 `if d.get("ok") and d.get("found")`
+    # ⇒ 池里明明有登录态也一律当「没取到」，回读通道空转。云端同函数已一并修。
+    cands: list = []
+    try:
+        cands = [h for h in (cp.get_cookies(domain) or []) if h]
+    except Exception:  # noqa: BLE001 — 老池文件/域未登记都不该让回读报错
+        cands = []
+    if not cands and header:
+        cands = [header]
+    if len(cands) > 1:
+        cands.sort(key=lambda h: -sum(1 for p in h.split(";") if "=" in p))
+    _log.info("[cookie_pool] get domain=%s hit=%s ckey=%s cands=%s",
+              root, bool(header), bool(ckey), len(cands))
+    return {"ok": True, "found": bool(header or cands), "domain": root,
+            "header": header, "ckey": ckey, "headers": cands}
 
 
 def _cloud_cfg() -> tuple[str, str]:
