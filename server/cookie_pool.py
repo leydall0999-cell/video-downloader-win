@@ -87,6 +87,27 @@ _POOL_EXTRA_DOMAINS = {"youtube.com"}
 #      用的是用户**手动保存**的 BDUSS，语义上是明确的「我愿意」。
 _CONTRIB_ONLY_DOMAINS = {"baidu.com"}
 
+# 🔴 2026-10-28：分享页 / 短链 / 极速版域 —— **不进自动同步遍历**。
+# 硬依据在 downloader._CDN_TO_COOKIE_DOMAIN / _cookie_login_host()：解析取 Cookie 时
+# 这些域会被先映射回主站（iesdouyin→douyin、gifshow/chenzhongtech→kuaishou、
+# b23.tv→bilibili），注释原话是「这些域自己那份 Cookie 往往只有设备指纹，直接拿它
+# 去解析 = 匿名请求」。⇒ 云端池里存这些域的条目**永远读不到**，纯冗余。
+# 实测（2026-10-28 云端池 46 条）：iesdouyin 6 / chenzhongtech 4 / gifshow 3 = 13 条
+# 占 28%，valid 0 条，而它们长期占着后台「缺口」列表，把「哪些域真缺登录态」淹没。
+# ⚠️ 别误读成「这些域是游客态」：实测 iesdouyin 确有 sessionid/sid_tt、
+# chenzhongtech 确有 passToken/userId，是根域同会话的**同名继承**。
+# 另有实打实的耗时：每个域都要解一次浏览器 Cookies 库（macOS 走钥匙串），而自动
+# 同步是「任何站点登录都触发一轮」，等于每轮多解 3 个域 + 3 次 1s 间隔。
+# 注意：只排除**自动遍历**，手动贡献仍放行（现有行为不挡用户显式操作）。
+_SHARE_ONLY_DOMAINS = {
+    "iesdouyin.com",      # 抖音分享落地页
+    "gifshow.com",        # 快手极速版 / 小剧场
+    "chenzhongtech.com",  # 快手极速版（另一域）
+    "xhslink.com",        # 小红书分享短链
+    "xhslink.cn",
+    "b23.tv",             # B 站短链（本就淡出白名单，列出以防将来被加回）
+}
+
 logger = logging.getLogger(__name__)
 
 # 金牌影院验真用的签名参数（chrqj.com / nmwchxx.com 同一站，共用密钥与视频 ID）
@@ -166,6 +187,18 @@ def is_contrib_only(domain: str) -> bool:
     if not d:
         return False
     return any(d == r or d.endswith("." + r) for r in _CONTRIB_ONLY_DOMAINS)
+
+
+def is_share_only(domain: str) -> bool:
+    """是否「分享页/短链」域：不进自动同步遍历（见 _SHARE_ONLY_DOMAINS 注释）。
+
+    只用于**遍历过滤**，不要拿它去卡 is_allowed —— 存量客户端仍会推这些域，
+    服务端一旦改成 400 拒收，它们会在每轮自动同步里反复重试。
+    """
+    d = _strip_sub(domain)
+    if not d:
+        return False
+    return any(d == r or d.endswith("." + r) for r in _SHARE_ONLY_DOMAINS)
 
 
 def _pool_file(domain: str) -> Path:
@@ -792,6 +825,23 @@ def _structural_check(domain: str, header: str) -> bool | None:
         return True
     logger.info("[cookie_pool] structural_check miss domain=%s（缺关键登录态字段）", d)
     return None
+
+
+def is_guest_only(domain: str, header: str) -> bool:
+    """本机这份 Cookie 是否「有表可查、且一个登录态字段都没有」＝游客态。
+
+    与 `_structural_check` 的分工：
+      - `_structural_check` 返回 None **不代表无效**（它只做「存在即放行」，缺失要
+        交给通用验真），所以不能拿 None 直接否决入池；
+      - 但「推送到云端池」这个动作不一样：结构表里那批字段**都是登录后才出现的**，
+        一个都没命中就说明本机根本没登录该站，推上去只会污染池子。实测证据
+        （2026-10-28）：qq.com 3 条、tiktok.com 2 条全部 invalid，正是这类。
+    返回 False 表示「判不了」（该域无结构表），不要在这种情况下否决。
+    """
+    d = _strip_sub(domain)
+    if not _STRUCTURAL_FIELDS.get(d):
+        return False
+    return _structural_check(d, header) is None
 
 
 def add_ckey(domain: str, ckey: str, source: str = "contrib") -> bool:

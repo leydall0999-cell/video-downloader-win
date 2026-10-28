@@ -4562,15 +4562,22 @@ def _sync_domains_to_cloud(url: str, token: str) -> list[dict]:
     避免两条入口各写一份循环而漂移（站间 1s 间隔是为避开 Cloudflare 限流）。
     """
     import time
-    from cookie_pool import _root_domains, is_contrib_only
+    from cookie_pool import _root_domains, is_contrib_only, is_guest_only, is_share_only
 
     results: list[dict] = []
     # 🔴 2026-10-25：「仅显式贡献」域（百度网盘）必须跳过自动同步 ——
     # 本函数会遍历所有白名单域、静默解密用户浏览器里的登录态推上云，
     # 百度一旦进来就等于替所有用户做了「共享我的网盘账号」这个决定。
     # 它只能走网盘页那个带确认弹窗的「贡献到共享池」按钮。
+    # 🔴 2026-10-28：再加两类排除，都是在止「往池子里灌没用的条目」这个血：
+    #   ① 分享页/短链/极速版域（iesdouyin / gifshow / chenzhongtech / xhslink）——
+    #      登录态在根域，这些域推上去实测 13 条**有效 0 条**，还白解 3 次 Cookies 库；
+    #   ② 本机游客态（下方 is_guest_only 逐域判）—— 有 Cookie 没登录态字段，
+    #      推上去只会让后台显示「有」，桌面端拿去解析必挂。
     domains = [d for d in sorted(_root_domains())
-               if d != "chrqj.com" and not is_contrib_only(d)]
+               if d != "chrqj.com"
+               and not is_contrib_only(d)
+               and not is_share_only(d)]
     for idx, domain in enumerate(domains):
         try:
             header = downloader.get_browser_cookie_header(domain, f"https://{domain}/")
@@ -4579,6 +4586,16 @@ def _sync_domains_to_cloud(url: str, token: str) -> list[dict]:
         if not header:
             results.append({"domain": domain, "pushed": False, "reason": _COOKIE_NO_LOGIN})
             continue
+        # 有结构校验表、却一个登录态字段都不命中 ⇒ 本机没登录该站，只是分享页/游客
+        # 残留。**reason 必须复用 _COOKIE_NO_LOGIN**：下游 failed 判定是
+        # `reason != _COOKIE_NO_LOGIN`，换新常量会被当成失败并留在下一轮无限重试。
+        try:
+            if is_guest_only(domain, header):
+                results.append({"domain": domain, "pushed": False,
+                                "reason": _COOKIE_NO_LOGIN, "guest_only": True})
+                continue
+        except Exception:
+            pass
         # 顺手把刚解密出来的新鲜值刷进本机快照。为什么必须做：cookie_cache 的 TTL
         # 是 30 天且「命中就直接用、不与浏览器比对」，用户重新登录后旧快照会一直
         # 挡在新鲜值前面（YouTube 独立链路 2026-09-27 已为此单修过：

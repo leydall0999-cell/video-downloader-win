@@ -281,6 +281,63 @@ def test_refreshes_local_snapshot() -> None:
     check("并照常返回逐域结果", out and out[0].get("pushed") is True, out)
 
 
+def test_share_domains_not_traversed():
+    """分享页/短链域不进自动遍历（2026-10-28）。
+
+    依据 downloader._cookie_login_host()：这些域取 Cookie 时会被映射回主站，
+    云端池存的那份永远读不到 ⇒ 推上去只是占位 + 白解一次浏览器 Cookies 库。
+    """
+    seen: list[str] = []
+
+    def fake_get(domain, url=""):
+        seen.append(domain)
+        return "sessionid=s; sid_tt=t"
+
+    with patch("cookie_pool._root_domains",
+               return_value={"iesdouyin.com", "douyin.com"}), \
+         patch.object(server_app.downloader, "get_browser_cookie_header",
+                      side_effect=fake_get), \
+         patch.object(server_app, "_push_cookie_to_cloud",
+                      return_value={"ok": True}):
+        out = server_app._sync_domains_to_cloud("http://x", "t")
+
+    check("分享域连解密都不做", seen == ["douyin.com"], seen)
+    check("结果里没有分享域", [r.get("domain") for r in out] == ["douyin.com"], out)
+
+
+def test_guest_only_not_pushed():
+    """有 Cookie 但缺全部登录态字段 ⇒ 不推，且**不能算失败**。
+
+    qq.com 那 3 条、tiktok.com 那 2 条就是这类：Cookie 一堆（pac_uid/uin 等），
+    但结构表里那些「登录后才出现」的字段一个都没有 ⇒ 解析必挂。
+    reason 必须复用 _COOKIE_NO_LOGIN，否则 failed 判定会把它当失败、每轮重试。
+    """
+    pushed: list[str] = []
+
+    def fake_get(domain, url=""):
+        if domain == "qq.com":
+            return "pac_uid=1; uin=o123"       # 腾讯游客态：无 vus_session / wap_sid2
+        return "sessionid=s; sid_tt=t"          # 抖音真登录态
+
+    def fake_push(domain, header, url, token):
+        pushed.append(domain)
+        return {"ok": True}
+
+    with patch("cookie_pool._root_domains",
+               return_value={"douyin.com", "qq.com"}), \
+         patch.object(server_app.downloader, "get_browser_cookie_header",
+                      side_effect=fake_get), \
+         patch.object(server_app, "_push_cookie_to_cloud", side_effect=fake_push):
+        out = server_app._sync_domains_to_cloud("http://x", "t")
+
+    qq = next((r for r in out if r.get("domain") == "qq.com"), {})
+    check("游客态不入池", pushed == ["douyin.com"], pushed)
+    check("游客态带 guest_only 标记", qq.get("guest_only") is True, qq)
+    check("游客态 reason 复用「未登录」",
+          qq.get("reason") == server_app._COOKIE_NO_LOGIN, qq)
+    check("真登录态照常推", next((r for r in out if r.get("domain") == "douyin.com"), {}).get("pushed") is True, out)
+
+
 if __name__ == "__main__":
     test_route_registered()
     test_requires_cloud_config()
@@ -293,5 +350,7 @@ if __name__ == "__main__":
     test_from_local_cloud_failure_not_fatal()
     test_from_local_no_cloud_config()
     test_refreshes_local_snapshot()
+    test_share_domains_not_traversed()
+    test_guest_only_not_pushed()
     print(f"\n{'=' * 46}\n通过 {_PASS} 项" + (f"，失败 {len(_FAIL)}: {_FAIL}" if _FAIL else "，全部通过"))
     sys.exit(1 if _FAIL else 0)
