@@ -2,7 +2,7 @@
 # Windows 桌面版构建（PyInstaller 不能跨平台编译 → exe 必须在 Windows 上构建）
 # ============================================================================
 # 触发方式：
-#   1. 手动：Actions 页面 → Build Windows → Run workflow（选分支，默认 app-dev）
+#   1. 手动：Actions 页面 → Build Windows → Run workflow（选分支，默认 main）
 #   2. 打 tag：git tag v1.0.69 && git push origin v1.0.69（正式发 Windows 版时用）
 #
 # 产物（artifact：windows-installer）：
@@ -25,9 +25,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "构建分支（默认 app-dev）"
+        description: "构建分支（默认 main）"
         required: false
-        default: "app-dev"
+        default: "main"
       commentary:
         description: "解说管线：auto=有 PAT 就捆 / force-skip=明确不捆"
         type: choice
