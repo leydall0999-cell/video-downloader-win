@@ -71,7 +71,10 @@ elif [[ -f "./cn_proxy.py" ]]; then
   SCRIPT_SRC="./cn_proxy.py"
 else
   warn "本地无 cn_proxy.py，尝试从 GitHub main 拉取…"
-  if curl -fsSL "https://raw.githubusercontent.com/leydall0999-cell/video-downloader/main/cn_proxy.py" -o "$INSTALL_DIR/cn_proxy.py"; then
+  # 2026-10-28 仓拆分：自更新必须指向 video-downloader-web（VPS 跑的就是网页版线）。
+  # 旧地址 video-downloader/main 拆仓后冻结在旧代码上，从那里拉会把 cn_proxy.py
+  # 静默回退成旧版 —— 比 404 更难发现。
+  if curl -fsSL "https://raw.githubusercontent.com/leydall0999-cell/video-downloader-web/main/cn_proxy.py" -o "$INSTALL_DIR/cn_proxy.py"; then
     SCRIPT_SRC="$INSTALL_DIR/cn_proxy.py"
   fi
 fi

@@ -27,7 +27,7 @@ Bash 环境有代理，仅放行部分域名：
 
 ## 二、git 推送
 
-- 远程是 SSH：`git@github.com:leydall0999-cell/video-downloader.git`
+- 远程是 SSH：`git@github.com:leydall0999-cell/video-downloader-win.git`（2026-10-28 三仓拆分：桌面端在 `-win` 仓，网页版在 `-web` 仓，旧 `video-downloader` 只作历史）
 - 沙盒内 `git push` 到 github.com **不可行**（代理拦 443 git 协议）。
 - **推送请在用户本机执行**（本机网络可访问 github.com，用 SSH 推绕开代理拦截）。
 - 沙盒内可行：gh CLI 的 `api` 类操作（走 `api.github.com`）。

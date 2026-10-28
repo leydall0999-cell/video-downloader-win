@@ -35,7 +35,7 @@ python3 cn_proxy.py 18888        # 监听 0.0.0.0:18888
 ```bash
 # 把脚本弄到 VPS（任选其一）：
 #   a) 本地 scp：  scp setup_vps.sh root@<VPS公网IP>:~/
-#   b) VPS 上直接拉： curl -fsSL https://raw.githubusercontent.com/leydall0999-cell/video-downloader/main/setup_vps.sh -o setup_vps.sh
+#   b) VPS 上直接拉： curl -fsSL https://raw.githubusercontent.com/leydall0999-cell/video-downloader-web/main/setup_vps.sh -o setup_vps.sh
 
 # 在 VPS 上执行（--auth 即代理账号密码，Railway 要用同一对）：
 sudo bash setup_vps.sh --auth 你的user:你的强密码 --port 18888
