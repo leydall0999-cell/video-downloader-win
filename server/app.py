@@ -4630,17 +4630,28 @@ _COOKIE_WATCH_STATE = Path.home() / ".videodownloader" / "cookie_sync_state.json
 _COOKIE_NO_LOGIN = "本机未登录"
 
 def _cookie_db_signature() -> dict[str, str]:
-    """各浏览器 Cookies 库的 (mtime, size) 快照，key 为库绝对路径。"""
-    import glob
+    """各浏览器 Cookies **数据库文件**的 (mtime, size) 快照，key 为库绝对路径。
 
+    🔴 2026-10-28 修复两处（两处都会让「无变化跳过」失效，后者更隐蔽）：
+    ① 旧实现遍历 `_BROWSER_COOKIE_PROFILES` 的 root 且只取 `roots[0]` —— 那是
+       Windows 路径 `%LOCALAPPDATA%\\...`，在 macOS/Linux 上 glob 不到 ⇒ 快照恒为空
+       ⇒ 每轮都全量解密+推送（本机实测 2h 934 次、23% 撞 429）。
+    ② 即便取到 root，root 是**目录**：Cookie 原地写进 db 文件不会改父目录 mtime/size
+       ⇒ 恒判「未变化」，用户新登录的站反而永远推不上去。
+    现改为精确到 db 文件（`downloader.cookie_db_paths()` 委托 browser_cookies 的
+    跨平台 profile 枚举，本机 5 个库 / 3.5ms）。
+    """
     sig: dict[str, str] = {}
-    for _name, pattern in downloader._BROWSER_COOKIE_PROFILES:
-        for db in glob.glob(os.path.expanduser(pattern)):
-            try:
-                st = os.stat(db)
-            except OSError:
-                continue
-            sig[db] = f"{int(st.st_mtime)}:{st.st_size}"
+    try:
+        paths = downloader.cookie_db_paths()
+    except Exception:  # noqa: BLE001 — 探测失败按「无变化」处理，绝不阻断同步入口
+        return sig
+    for db in paths:
+        try:
+            st = os.stat(db)
+        except OSError:
+            continue
+        sig[db] = f"{int(st.st_mtime)}:{st.st_size}"
     return sig
 
 @app.post("/api/cookie/sync/auto")

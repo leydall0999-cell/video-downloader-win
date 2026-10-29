@@ -1732,9 +1732,46 @@ try:
 except Exception:  # pragma: no cover
     _browser_cookies = None  # type: ignore[assignment]
 
+# 🔴 2026-10-28 修复：必须展开**全部** roots，不能只取 roots[0]。
+# roots 是跨平台三元组（Windows / macOS / Linux），roots[0] 恒为 `%LOCALAPPDATA%\...`，
+# 在 macOS / Linux 上既不会展开也 glob 不到 ⇒ 派生出空表 ⇒ 下游
+# `app._cookie_db_signature()` 返回 `{}` ⇒ `/api/cookie/sync/auto` 的
+# 「浏览器登录态未变化就 skipped」永远不成立 ⇒ **每轮全量解密 + 推送**。
+# 实测代价（2026-10-28 本机 Mac）：2 小时 934 次 /api/cookie/sync，其中 218 次撞
+# 429 限流（23%），且每轮都要读钥匙串解 Chrome Cookies。Windows 上因 roots[0] 正好
+# 命中而看不出问题——这是典型的「只在 Mac/Linux 复现」的跨平台漏写。
 _BROWSER_COOKIE_PROFILES: tuple[tuple[str, str], ...] = tuple(
-    (s["key"], s["roots"][0]) for s in (_browser_cookies._BROWSER_SOURCES if _browser_cookies else ())
+    (s["key"], root)
+    for s in (_browser_cookies._BROWSER_SOURCES if _browser_cookies else ())
+    for root in s["roots"]
 )
+
+
+def cookie_db_paths() -> list[str]:
+    """本机所有浏览器 Cookies **数据库文件**的绝对路径（跨平台去重）。
+
+    🔴 别用 `_BROWSER_COOKIE_PROFILES` 里的 root 目录做「登录态变化」快照：
+    root 是**目录**，而 Cookie 是**原地写**进 db 文件的 —— 只改内容不改父目录
+    mtime 与 size，拿目录做签名会恒判「未变化」，该推的新登录态永远推不上去。
+    必须精确到 db 文件（`<profile>/Cookies` 或 `<profile>/Network/Cookies`）。
+
+    实现委托 `browser_cookies.iter_profiles()`：它已处理 Chromium 新旧两代布局、
+    Firefox 的 `cookies.sqlite`、Opera 这类 root 即 profile 的差异，且遍历全部
+    跨平台 roots。本机实测 5 个库 / 3.5ms，可放在每轮同步里跑。
+    """
+    if _browser_cookies is None:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for src in _browser_cookies._BROWSER_SOURCES:
+        try:
+            for _profile, db in _browser_cookies.iter_profiles(src):
+                if db not in seen:
+                    seen.add(db)
+                    out.append(db)
+        except Exception:  # noqa: BLE001 — 单个浏览器探测失败不能拖垮整体签名
+            continue
+    return out
 
 # yt-dlp 认识的浏览器名（其余如 UC/360/QQ 只能走自解密）
 _YTDLP_BROWSERS: frozenset[str] = frozenset(

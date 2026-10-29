@@ -78,6 +78,43 @@ def test_signature_detects_change() -> None:
     check("连续两次一致（未操作浏览器时不该抖动）", sig1 == sig2)
 
 
+def test_signature_targets_real_db_files() -> None:
+    """回归 2026-10-28：签名必须落在 Cookies **库文件**上，且覆盖全部跨平台 roots。
+
+    两个真实缺陷（都在 mac/Linux 上才暴露，Windows 因 roots[0] 正好命中而正常）：
+    ① `_BROWSER_COOKIE_PROFILES` 只取 `roots[0]`（= `%LOCALAPPDATA%\\...`），mac 上
+       glob 不到 ⇒ 签名恒为空 ⇒ auto 端点永不 skipped ⇒ 每轮全量解密+推送。
+       实测代价：2 小时 934 次 /api/cookie/sync，218 次撞 429。
+    ② 即便取到 root，root 是**目录**：Cookie 原地写库不改父目录 mtime/size ⇒
+       恒判「未变化」，用户新登录的站点永远推不上去。
+    """
+    print("[3b] 签名精确到库文件，且覆盖跨平台 roots（回归 2026-10-28 双缺陷）")
+    paths = server_app.downloader.cookie_db_paths()
+    check("库路径非空（本机至少一个浏览器 Cookies 库）", bool(paths), len(paths))
+    check("全部是文件而非浏览器根目录",
+          all(os.path.isfile(p) for p in paths), paths[:2])
+    check("路径指向 Cookies / cookies.sqlite 库",
+          all(p.endswith(("Cookies", "cookies.sqlite")) for p in paths), paths[:2])
+    check("签名 key 也是这些库文件（签名非空的前提）",
+          set(paths) <= set(server_app._cookie_db_signature()) or not paths, paths[:2])
+
+    # 跨平台：roots[0] 不存在（模拟 Windows 路径在 mac 上）、只有后一个 root 有库。
+    with tempfile.TemporaryDirectory() as td:
+        win_like = os.path.join(td, "localappdata-missing")
+        mac_like = os.path.join(td, "Profile 1")
+        os.makedirs(os.path.join(mac_like, "Network"))
+        db = os.path.join(mac_like, "Network", "Cookies")
+        Path(db).write_bytes(b"SQLite format 3\x00")
+        src = {"key": "chrome", "kind": "chromium", "roots": [win_like, mac_like]}
+        patched = patch.object(server_app.downloader._browser_cookies,
+                               "_BROWSER_SOURCES", (src,))
+        with patched:
+            got = server_app.downloader.cookie_db_paths()
+        check("能扫到非首个 root 下的库（旧实现只取 roots[0] 会漏）",
+              any(p.startswith(mac_like) for p in got), got)
+        check("缺失的首个 root 不会被误报成库", not any(p.startswith(win_like) for p in got), got)
+
+
 def test_skip_when_unchanged() -> None:
     print("[4] 签名未变 ⇒ skipped，且不再解密/推送（这是 2 分钟轮询的成本前提）")
     c = _client()
@@ -342,6 +379,7 @@ if __name__ == "__main__":
     test_route_registered()
     test_requires_cloud_config()
     test_signature_detects_change()
+    test_signature_targets_real_db_files()
     test_skip_when_unchanged()
     test_push_failure_keeps_state()
     test_partial_failure_keeps_state()
