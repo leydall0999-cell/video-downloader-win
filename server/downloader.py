@@ -6849,23 +6849,120 @@ def _netdisk_output_name(task: DownloadTask, content_type: str, final_url: str) 
     return base
 
 
+def _netdisk_conn_count(total: int, chunk: int) -> int:
+    """并发连接数（百度直链限速是 per-connection，只能靠叠加连接提速）。
+
+    实测（2026-10-28，439MB 文件 / 超会账号 / 4MB 块 / 12s 窗口，curl 矩阵）：
+        1 连 0.30 MB/s · 8 连 2.47 · 16 连 5.33 · 24 连 7.45 · 32 连 9.63 · 48 连 14.55
+    每连接恒定 ~0.30MB/s，近似线性 ⇒ **连接数是唯一有效杠杆**，账号等级只决定单连接
+    基线（本机非会员 0.09~0.15）。Mac 侧 10MB/s ≈ 32~40 连。
+    默认 24 是「明显提速又不易在单 IP 上撞风控」的折中；`VDL_NETDISK_CONN` 可覆盖，
+    设 1 即退回单连接。小文件按块数收敛 —— 每条连都要重握手 + 慢启动，开太多更慢
+    （实测 1MB 块 16 连只有 1.51MB/s，4MB 块 16 连 5.33MB/s）。
+    """
+    blocks = max(1, (total + chunk - 1) // chunk)
+    raw = (os.environ.get("VDL_NETDISK_CONN") or "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        want = int(raw)
+    else:
+        want = 24 if blocks >= 24 else max(2, blocks)
+    return max(1, min(want, blocks, 64))
+
+
+class _NetdiskHTTPError(RuntimeError):
+    def __init__(self, status: int):
+        super().__init__(f"HTTP {status}")
+        self.status = status
+
+
+def _download_netdisk_serial(task: DownloadTask, store: TaskStore,
+                             headers: dict, proxies, total: int, resume_from: int,
+                             part: Path) -> tuple[bool, str]:
+    """旧版串行实现（单连接 4MB 有界 Range 循环）—— 只在「拿不到总长」时兜底。
+
+    百度直链**必须**有界 Range：不带 Range / `bytes=0-` 开放区间一律 403，
+    错误码伪装成 31326「无权限」或 31360「直链过期」，极具误导性。
+
+    返回 (成功与否, content_type)；状态由调用方统一收尾。
+    暂停/取消仍用异常上抛，语义与并发版一致。
+    """
+    import requests
+
+    CHUNK = max(256 * 1024, int(os.environ.get("VDL_NETDISK_CHUNK", str(4 * 1024 * 1024))))
+    started = time.time()
+    last_push = 0.0
+    done = resume_from
+    last_ct = ""
+    with open(part, "ab" if resume_from else "wb") as fh:
+        offset = resume_from
+        while True:
+            h = dict(headers)
+            h["Range"] = f"bytes={offset}-{offset + CHUNK - 1}"
+            with requests.get(task.url, headers=h, proxies=proxies, stream=True,
+                              timeout=(15, 60), allow_redirects=True) as r:
+                last_ct = r.headers.get("Content-Type", "") or last_ct
+                if r.status_code == 416:
+                    break
+                if r.status_code >= 400:
+                    raise _NetdiskHTTPError(r.status_code)
+                cr = r.headers.get("Content-Range") or ""
+                if "/" in cr:
+                    tot = cr.rsplit("/", 1)[-1].strip()
+                    if tot.isdigit() and int(tot) > 0:
+                        total = int(tot)
+                        store.update(task.id, total_bytes=total, filesize=total)
+                got = 0
+                for chunk in r.iter_content(256 * 1024):
+                    if not chunk:
+                        continue
+                    if task.cancel_requested or task.is_finished:
+                        raise _NetdiskCanceled()
+                    if task.pause_requested:
+                        raise _NetdiskPaused()
+                    fh.write(chunk)
+                    got += len(chunk)
+                    done += len(chunk)
+                    now = time.time()
+                    if now - last_push >= 0.5:
+                        last_push = now
+                        elapsed = max(now - started, 0.001)
+                        speed = (done - resume_from) / elapsed
+                        store.update(
+                            task.id,
+                            downloaded_bytes=done,
+                            progress=round(done / total * 100.0, 1) if total else 0.0,
+                            speed=round(max(speed, 0.0), 1),
+                            eta=int((total - done) / speed) if (total and speed > 0) else 0,
+                        )
+            if total and done >= total:
+                break
+            if got < CHUNK or got <= 0:
+                break
+            offset = done
+    return True, last_ct
+
+
 def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
                              cookie: str = "", proxy: str = "") -> None:
-    """百度网盘直链 → 按文件流式下载（**不经过 yt-dlp 解析**）。
+    """百度网盘直链 → 下载（**不经过 yt-dlp 解析**）。
 
-    🔴 为什么必须绕开 yt-dlp：`d.pcs.baidu.com` 的 dlink 会被 generic 提取器
-    当成「媒体页面」处理，2026-10-24 实测后果：
-      ① 标题被替换成直链路径段 ⇒ 用户看到 `3eab43fb6m1795...` 这种乱码文件名；
-      ② 扩展名按视频猜成 `.mp4` ⇒ 实际是 mp3 的文件被存成 mp4；
-      ③ 少数情况提取阶段直接失败，界面报「视频解析失败 [generic] …」。
+    🔴 为什么绕开 yt-dlp：d.pcs.baidu.com 的 dlink 会被 generic 提取器当成媒体页面，
+    造成 ① 文件名变成直链路径段、② mp3 被猜成 .mp4、③ 部分直链提取阶段直接失败。
 
-    网盘本来就是「给一条直链、下一个文件」，没有清晰度/格式可选，不需要解析。
-    约束（与 v1.0.88 的网盘策略一致）：单连接、手动带 Cookie、必须带 Range；
-    **UA 由 _pick_netdisk_ua 运行时协商**（浏览器身份 / P2SP 身份取决于账号分桶，
-    写死任何一个都会在另一类账号上 403 31326）。
-    requests 的手动 header 在 302 跳转后仍会携带，所以跨到 *.baidupcs.com 也不会 403。
+    🔴 2026-10-28 提速（用户：「Mac 能突破 10MB/s，我们为什么不行」）：
+    百度对**每一条 TCP 连接**单独限速，实测同一条 dlink 每连恒定 ~0.30MB/s，
+    8/16/24/32/48 连呈严格线性（2.47/5.33/7.45/9.63/14.55 MB/s）。
+    旧实现是 `while True: 4MB 有界 Range` —— **任一瞬间只有 1 条连接**，
+    所以永远卡在 0.09~0.30MB/s；`VDL_NETDISK_CHUNK` 只改块大小、aria2c 分片参数
+    在这条链路上根本没被消费。现在改为「1 字节探测拿总长 → N 连并发拉块 →
+    位图记已完成块」，断点续传/暂停/取消语义保持不变。
+
+    其余约束照旧：每块必须有界 Range、UA 运行时协商、Cookie 手动带。
+    `netdisk.part` 是预分配到最终大小的容器，`netdisk.part.map` 每块一字节记录
+    完成状态（多线程乱序写盘，无法再用「文件大小」当进度）。
     """
-    import requests  # 与本文件其它路径一致：延迟导入，避免拖慢启动
+    import queue  # noqa: PLC0415 — 延迟导入，与本文件其它路径一致
+    import requests  # noqa: PLC0415
 
     workdir = Path(task.workdir) if task.workdir else None
     if workdir is None:
@@ -6874,151 +6971,301 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
     workdir.mkdir(parents=True, exist_ok=True)
 
     part = workdir / "netdisk.part"
-    # 🔴 断点续传（2026-10-26）：暂停会保留 part；重启下载时若 part 存在 →
-    # 带 Range 从已下字节继续、追加写入。服务端若不按 Range 返回 206
-    # （直链过期/不支持）则回退整文件重下——绝不能把 200 全量 append 进旧 part。
-    resume_from = 0
-    if part.exists():
-        try:
-            resume_from = part.stat().st_size
-        except OSError:
-            resume_from = 0
-
-    headers = {
-        # UA 不写死：百度按「账号 + UA」分桶，见 _NETDISK_UA_CANDIDATES 注释。
-        # 先探 1 字节确认可用的身份，再拿它下发正式请求。
-        "User-Agent": _pick_netdisk_ua(task.url, cookie, proxy),
-    }
-    # 🔴 2026-10-28：Range 必须**有界**（bytes=start-end），这里不再放一个固定的
-    #   "bytes=0-"，改成下面按块循环里逐块设置。
-    #   实测同一条 dlink（非超会账号的个人网盘直链）：
-    #     · 不带 Range            → 403
-    #     · bytes=0-（开放区间）  → 403
-    #     · bytes=0-1023 / 0-4MB  → 206
-    #   所以「一次整包 GET」在百度这条路是死的，只能按块拉；这也解释了为什么
-    #   浏览器能播、下载器一律 403。
+    bmap = workdir / "netdisk.part.map"
     CHUNK = max(256 * 1024, int(os.environ.get("VDL_NETDISK_CHUNK", str(4 * 1024 * 1024))))
+    headers = {"User-Agent": _pick_netdisk_ua(task.url, cookie, proxy)}
     if cookie:
         headers["Cookie"] = cookie
     proxies = {"http": proxy, "https": proxy} if proxy else None
-    started = time.time()
-    last_push = 0.0
-    done = 0
-    total = int(getattr(task, "total_bytes", 0) or 0)
 
-    store.update(task.id, status="downloading", speed=0.0, eta=0,
-                 downloaded_bytes=resume_from,
-                 progress=round(resume_from / total * 100.0, 1) if (total and resume_from) else 0.0)
-    task.add_step("下载文件", "running",
-                  f"续传第 {resume_from} 字节…" if resume_from else "连接中…")
+    total = int(getattr(task, "total_bytes", 0) or 0)
+    meta = {"ct": "", "url": task.url}
+
+    # ── 1) 1 字节探测：拿总长 + 顺带验证 Range 是否被接受（代价一个 RTT）
+    try:
+        with requests.get(task.url, headers={**headers, "Range": "bytes=0-0"},
+                          proxies=proxies, stream=True, timeout=(15, 30),
+                          allow_redirects=True) as r:
+            if r.status_code >= 400:
+                raise _NetdiskHTTPError(r.status_code)
+            meta["ct"] = r.headers.get("Content-Type") or ""
+            meta["url"] = r.url or task.url
+            cr = r.headers.get("Content-Range") or ""
+            if "/" in cr:
+                tot = cr.rsplit("/", 1)[-1].strip()
+                if tot.isdigit() and int(tot) > 0:
+                    total = int(tot)
+    except _NetdiskHTTPError as exc:
+        msg = str(exc)
+        task.add_step("下载文件", "error", msg)
+        logger.warning("[netdisk] 探测直链失败 task=%s：%s", task.id, msg)
+        store.update(task.id, status="failed", error="网盘下载失败",
+                     hint=_user_error_text())
+        return
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)[:200]
+        task.add_step("下载文件", "error", msg)
+        logger.warning("[netdisk] 探测直链异常 task=%s：%s", task.id, msg)
+        store.update(task.id, status="failed", error="网盘下载失败",
+                     hint=_user_error_text())
+        return
+
+    if total:
+        store.update(task.id, total_bytes=total, filesize=total)
+
+    # ── 2) 拿不到总长（服务端忽略 Range / 回 200 全量）→ 退回串行实现
+    if not total:
+        resume_from = part.stat().st_size if part.exists() else 0
+        task.add_step("下载文件", "running", "连接中…")
+        try:
+            ok, ct = _download_netdisk_serial(task, store, headers, proxies, total,
+                                              resume_from, part)
+        except _NetdiskCanceled:
+            part.unlink(missing_ok=True)
+            bmap.unlink(missing_ok=True)
+            if not task.is_finished:
+                store.update(task.id, status="canceled", error="已取消")
+            return
+        except _NetdiskPaused:
+            kept = part.stat().st_size if part.exists() else 0
+            task.add_step("下载文件", "pending", "已暂停（点「继续」断点续传）")
+            task.log(f"用户暂停网盘下载：已下 {kept} 字节，保留 .part 供续传")
+            store.update(task.id, status="paused", speed=0.0, eta=0,
+                         downloaded_bytes=kept,
+                         progress=round(kept / total * 100.0, 1) if total else 0.0)
+            return
+        except Exception as exc:  # noqa: BLE001
+            part.unlink(missing_ok=True)
+            msg = str(exc)[:200]
+            task.add_step("下载文件", "error", msg)
+            logger.warning("[netdisk] 百度直链下载失败 task=%s：%s", task.id, msg)
+            store.update(task.id, status="failed", error="网盘下载失败",
+                         hint=_user_error_text())
+            return
+        out_name = _netdisk_output_name(task, ct or meta["ct"], meta["url"])
+        out = workdir / out_name
+        try:
+            if out.exists():
+                out.unlink()
+            part.replace(out)
+        except OSError as exc:
+            store.update(task.id, status="failed", error="保存文件失败",
+                         hint=str(exc)[:200])
+            return
+        size = out.stat().st_size
+        task.add_step("下载文件", "done", f"输出文件：{out.name}")
+        task.log(f"网盘下载完成：{out.name}（{size} 字节，单连接兜底）")
+        store.update(task.id, status="completed", progress=100.0, filepath=out,
+                     filename=out.name, filesize=size, downloaded_bytes=size,
+                     total_bytes=size, speed=0.0, eta=0)
+        return
+
+    # ── 3) 并发分块下载
+    nblocks = max(1, (total + CHUNK - 1) // CHUNK)
+    done_map = bytearray(nblocks)
+    resume_note = ""
+    if part.exists() and bmap.exists():
+        try:
+            saved = bytearray(bmap.read_bytes())
+            if len(saved) == nblocks:
+                done_map = saved
+                resume_note = f"续传：{sum(done_map)}/{nblocks} 块已完成"
+        except OSError:
+            done_map = bytearray(nblocks)
+    elif part.exists():
+        # 🔴 旧版（串行）留下的 .part 没有位图 —— 多线程会乱序写盘，光看文件大小
+        #    无法判断哪些字节是真下好的，只能整份重下，绝不能拿 st_size 当进度。
+        resume_note = "检测到旧版半成品（无分块位图），从头下载"
+
+    done_base = 0
+    for i in range(nblocks):
+        if done_map[i]:
+            done_base += min(CHUNK, total - i * CHUNK)
 
     try:
-        offset = resume_from           # 本块起始字节
-        done = resume_from             # 已落盘字节（含历史断点）
-        append = resume_from > 0
-        last_ct, last_url = "", task.url
-        with open(part, "ab" if append else "wb") as fh:
-            while True:
-                h = dict(headers)
-                h["Range"] = f"bytes={offset}-{offset + CHUNK - 1}"
-                with requests.get(task.url, headers=h, proxies=proxies, stream=True,
-                                  timeout=(15, 60), allow_redirects=True) as r:
-                    last_ct = r.headers.get("Content-Type", "") or last_ct
-                    last_url = r.url or last_url
-                    if r.status_code == 416:
-                        break                       # 已经到文件末尾，正常收尾
-                    if r.status_code >= 400:
-                        raise RuntimeError(f"HTTP {r.status_code}")
-                    # Content-Range: bytes 0-4194303/378978423 → 从右半边拿总长
-                    cr = r.headers.get("Content-Range") or ""
-                    if "/" in cr:
-                        tot = cr.rsplit("/", 1)[-1].strip()
-                        if tot.isdigit() and int(tot) > 0:
-                            total = int(tot)
-                            store.update(task.id, total_bytes=total, filesize=total)
-                    elif not total:
-                        # 服务端给了 200 全量（忽略 Range）→ 用 Content-Length 当总长
-                        total = int(r.headers.get("Content-Length") or 0)
-                        if total:
-                            store.update(task.id, total_bytes=total, filesize=total)
-                    got = 0
-                    for chunk in r.iter_content(256 * 1024):
-                        if not chunk:
-                            continue
-                        if task.cancel_requested or task.is_finished:
-                            raise _NetdiskCanceled()
-                        if task.pause_requested:
-                            raise _NetdiskPaused()
-                        fh.write(chunk)
-                        got += len(chunk)
-                        done += len(chunk)
-                        now = time.time()
-                        if now - last_push >= 0.5:
-                            last_push = now
-                            elapsed = max(now - started, 0.001)
-                            # 速度只算本次会话新下的字节：续传时 done 含历史断点，
-                            # 直接除会把 100MB 历史 / 1s 算成 100MB/s 假速度。
-                            speed = (done - resume_from) / elapsed
-                            store.update(
-                                task.id,
-                                downloaded_bytes=done,
-                                progress=round(done / total * 100.0, 1) if total else 0.0,
-                                speed=round(max(speed, 0.0), 1),
-                                eta=int((total - done) / speed) if (total and speed > 0) else 0,
-                            )
-                # 收尾判定：下满总长 / 本块不足 CHUNK（= 已到文件尾）/ 一块没拿到
-                if total and done >= total:
-                    break
-                if got < CHUNK or got <= 0:
-                    break
-                offset = done
-        out_name = _netdisk_output_name(task, last_ct, last_url)
-    except _NetdiskCanceled:
+        mode = "r+b" if part.exists() else "wb"
+        with open(part, mode) as fh:
+            if fh.seek(0, os.SEEK_END) != total:
+                fh.truncate(total)      # 预分配：NTFS 只登记长度，不真占盘
+    except OSError as exc:
+        store.update(task.id, status="failed", error="创建临时文件失败",
+                     hint=str(exc)[:200])
+        return
+    try:
+        bmap.write_bytes(bytes(done_map))
+    except OSError as exc:
+        store.update(task.id, status="failed", error="创建分块位图失败",
+                     hint=str(exc)[:200])
+        return
+
+    q: queue.Queue = queue.Queue()
+    for i in range(nblocks):
+        if not done_map[i]:
+            q.put(i)
+
+    nconn = _netdisk_conn_count(total, CHUNK)
+    stop = threading.Event()
+    lock = threading.Lock()
+    done = [done_base]
+    last_push = [0.0]
+    fatal: list = []
+    started = time.time()
+
+    store.update(task.id, status="downloading", speed=0.0, eta=0,
+                 downloaded_bytes=done_base,
+                 progress=round(done_base / total * 100.0, 1) if done_base else 0.0)
+    task.add_step("下载文件", "running",
+                  resume_note or f"并发 {nconn} 连接下载 {nblocks} 块…")
+
+    def _worker() -> None:
+        try:
+            wf = open(part, "r+b")
+        except OSError as exc:
+            with lock:
+                if not fatal:
+                    fatal.append(f"打开临时文件失败：{exc}")
+            stop.set()
+            return
+        # 每条 worker 复用一个 Session：TCP/TLS 握手只做一次。
+        # 小文件（几块就下完）全靠这个提速 —— 实测 51MB/13 块不复用连接只有
+        # 0.90MB/s，复用后接近连接数应得的并行速率。
+        sess = requests.Session()
+        sess.trust_env = False
+        try:
+            while not stop.is_set():
+                if task.cancel_requested or task.is_finished or task.pause_requested:
+                    stop.set()
+                    return
+                try:
+                    i = q.get_nowait()
+                except queue.Empty:
+                    return
+                st = i * CHUNK
+                en = min(st + CHUNK, total) - 1
+                want = en - st + 1
+                err = None
+                for attempt in range(3):
+                    if stop.is_set():
+                        return
+                    try:
+                        h = dict(headers)
+                        h["Range"] = f"bytes={st}-{en}"
+                        with sess.get(task.url, headers=h, proxies=proxies,
+                                      stream=True, timeout=(15, 30),
+                                      allow_redirects=True) as r:
+                            if r.status_code >= 400:
+                                raise _NetdiskHTTPError(r.status_code)
+                            if r.status_code == 206:
+                                meta["ct"] = r.headers.get("Content-Type") or meta["ct"]
+                                meta["url"] = r.url or meta["url"]
+                            wf.seek(st)
+                            got = 0
+                            for piece in r.iter_content(256 * 1024):
+                                if not piece:
+                                    continue
+                                if stop.is_set():
+                                    return
+                                if (task.cancel_requested or task.is_finished
+                                        or task.pause_requested):
+                                    stop.set()
+                                    return
+                                wf.write(piece)
+                                got += len(piece)
+                                with lock:
+                                    done[0] += len(piece)
+                                    now = time.time()
+                                    if now - last_push[0] >= 0.5:
+                                        last_push[0] = now
+                                        speed = (done[0] - done_base) / max(now - started, 0.001)
+                                        store.update(
+                                            task.id,
+                                            downloaded_bytes=done[0],
+                                            progress=round(done[0] / total * 100.0, 1),
+                                            speed=round(max(speed, 0.0), 1),
+                                            eta=int((total - done[0]) / speed) if speed > 0 else 0,
+                                        )
+                        if got != want:
+                            raise RuntimeError(f"块 {i} 长度不符 {got} != {want}")
+                        wf.flush()
+                        with lock:
+                            done_map[i] = 1
+                            bmap.write_bytes(bytes(done_map))
+                        err = None
+                        break
+                    except _NetdiskHTTPError as exc:
+                        err = exc
+                        if exc.status == 416:
+                            break       # 已到文件尾（理论上不会进到这里）
+                    except Exception as exc:  # noqa: BLE001
+                        err = exc
+                    time.sleep(0.8 * (attempt + 1))
+                if err is not None:
+                    with lock:
+                        if not fatal:
+                            fatal.append(f"块 {i} 下载失败：{err}")
+                    stop.set()
+                    return
+        finally:
+            try:
+                wf.close()
+            except OSError:
+                pass
+
+    threads = [threading.Thread(target=_worker, daemon=True) for _ in range(nconn)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # ── 4) 收尾：取消 / 暂停 / 失败 / 完成
+    if task.cancel_requested or task.is_finished:
         part.unlink(missing_ok=True)
+        bmap.unlink(missing_ok=True)
         if not task.is_finished:
             store.update(task.id, status="canceled", error="已取消")
         return
-    except _NetdiskPaused:
-        # 🔴 与取消的本质区别：保留 netdisk.part，点「继续」带 Range 断点续传。
-        try:
-            kept = part.stat().st_size
-        except OSError:
-            kept = done
+    if task.pause_requested:
+        kept = sum(done_map)
+        kept_bytes = 0
+        for i in range(nblocks):
+            if done_map[i]:
+                kept_bytes += min(CHUNK, total - i * CHUNK)
         task.add_step("下载文件", "pending", "已暂停（点「继续」断点续传）")
-        task.log(f"用户暂停网盘下载：已下 {kept} 字节，保留 .part 供续传")
+        task.log(f"用户暂停网盘下载：已下 {kept_bytes} 字节（{kept}/{nblocks} 块），"
+                 f"保留 .part + 位图供续传")
         store.update(task.id, status="paused", speed=0.0, eta=0,
-                     downloaded_bytes=kept,
-                     progress=round(kept / total * 100.0, 1) if total else 0.0)
+                     downloaded_bytes=kept_bytes,
+                     progress=round(kept_bytes / total * 100.0, 1))
         return
-    except Exception as exc:  # noqa: BLE001
-        part.unlink(missing_ok=True)
-        msg = str(exc)[:200]
-        task.add_step("下载文件", "error", msg)
-        # 真实原因（直链过期 / 登录态失效的原始异常）只进日志，且步骤里仍保留原文
-        # 给「过程日志」看；上屏 hint 统一文案（2026-10-27 定档）。
+    if fatal or any(v == 0 for v in done_map):
+        msg = fatal[0] if fatal else "存在未完成分块"
+        task.add_step("下载文件", "error", str(msg)[:200])
         logger.warning("[netdisk] 百度直链下载失败 task=%s：%s", task.id, msg)
-        store.update(
-            task.id, status="failed", error="网盘下载失败",
-            hint=_user_error_text(),
-        )
+        part.unlink(missing_ok=True)
+        bmap.unlink(missing_ok=True)
+        store.update(task.id, status="failed", error="网盘下载失败",
+                     hint=_user_error_text())
         return
 
+    out_name = _netdisk_output_name(task, meta["ct"], meta["url"])
     out = workdir / out_name
     try:
         if out.exists():
             out.unlink()
         part.replace(out)
+        bmap.unlink(missing_ok=True)
     except OSError as exc:
         store.update(task.id, status="failed", error="保存文件失败", hint=str(exc)[:200])
         return
 
     size = out.stat().st_size
+    elapsed = max(time.time() - started, 0.001)
+    avg = (size - done_base) / elapsed / 1048576
     task.add_step("下载文件", "done", f"输出文件：{out.name}")
-    task.log(f"网盘下载完成：{out.name}（{size} 字节）")
+    task.log(f"网盘下载完成：{out.name}（{size} 字节，{nconn} 连接并发，均速 {avg:.2f}MB/s）")
     store.update(task.id, status="completed", progress=100.0, filepath=out,
                  filename=out.name, filesize=size, downloaded_bytes=size,
                  total_bytes=size, speed=0.0, eta=0)
-
 
 def _force_land_paused(task: DownloadTask, store: TaskStore) -> None:
     """暂停标志长期未被进度钩子消费时，由主等待循环就地落 paused。
