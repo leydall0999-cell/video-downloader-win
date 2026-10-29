@@ -1,0 +1,5 @@
+=== run: 40832229272 sha: 7437339625a84fe32b65c0e8c6c27d13865a3a79 ===
+=== python ===
+Python 3.12.10
+=== ffmpeg ===
+D:\a\_temp\e034710c-94db-48fa-b2c6-ea8c0a1e42f2.sh: line 11: ffmpeg: command not found
