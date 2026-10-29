@@ -45,19 +45,30 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 def _web_app_py() -> str:
-    """读 web-dev 分支的 server/app.py（网页端入口）。"""
-    try:
-        r = subprocess.run(["git", "show", "web-dev:server/app.py"],
-                           cwd=str(_REPO), capture_output=True, timeout=25)
-    except Exception as e:  # noqa: BLE001
-        print(f"  ❌ 读不到 web-dev:server/app.py（{e}）—— 无法核查网页端配额")
-        FAILS.append("read web-dev app.py")
-        return ""
-    src = r.stdout.decode("utf-8", "ignore")
-    if not src:
-        print("  ❌ git show web-dev:server/app.py 返回空 —— 无法核查网页端配额")
-        FAILS.append("read web-dev app.py")
-    return src
+    """读**网页版仓**的 server/app.py（网页端入口）。
+
+    🔴 2026-10-29：三仓拆分后 `web-dev` 分支已不存在（`git show web-dev:...` 恒空），
+    改为按工作树路径读：① 环境变量 `VDL_WEB_REPO` ② 默认同级 `video-downloader` 仓。
+    """
+    import os
+    roots = []
+    env = (os.environ.get("VDL_WEB_REPO") or "").strip()
+    if env:
+        roots.append(pathlib.Path(env))
+    roots.append(_REPO.parent / "video-downloader")
+    for root in roots:
+        p = root / "server" / "app.py"
+        try:
+            if p.is_file():
+                src = p.read_text(encoding="utf-8", errors="ignore")
+                if src:
+                    return src
+        except OSError:
+            continue
+    print("  ❌ 读不到网页版仓的 server/app.py —— 无法核查网页端配额"
+          "（可用 VDL_WEB_REPO 指定网页版仓路径）")
+    FAILS.append("read web app.py")
+    return ""
 
 
 def test_ip_quota_defaults_off() -> None:

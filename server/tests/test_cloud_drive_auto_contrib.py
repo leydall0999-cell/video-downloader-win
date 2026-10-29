@@ -28,6 +28,8 @@ if str(SERVER_DIR) not in sys.path:
 os.environ.setdefault("VDL_DATA_DIR", "/tmp/vdl_test_auto_contrib")
 os.environ.setdefault("VDL_CLOUD_LINK", "0")
 
+import app as server_app  # noqa: E402,F401 — 必须先 import app：routers.cloud_drive 里有 `import app`，
+# 直接先导入 routers.cloud_drive 会撞「partially initialized module」循环导入
 import routers.cloud_drive as rt  # noqa: E402
 
 

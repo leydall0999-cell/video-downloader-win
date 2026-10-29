@@ -100,7 +100,11 @@ class TestSourcing(unittest.TestCase):
         src = _src()
         idx = src.find("def _download_netdisk_direct(")
         body = src[idx:idx + 3000]
-        self.assertIn('"Range": "bytes=0-"', body, "缺 Range：百度会直接 403")
+        self.assertIn('"Range": "bytes=0-0"', body,
+                      "探测请求必须带 1 字节有界 Range（百度对开放区间一律 403）")
+        full = src[idx:src.find("\ndef ", idx + 10)]   # 分块 Range 在本函数中后段
+        self.assertIn('h["Range"] = f"bytes={st}-{en}"', full,
+                      "每个分块必须带自己的有界 Range，否则百度 403")
         self.assertIn("_pick_netdisk_ua(", body, "UA 必须运行时协商，不能写死")
         self.assertNotIn('"User-Agent": _NETDISK_UA', body, "写死 P2SP UA 会在部分账号上 403")
         self.assertNotIn('"User-Agent": _NETDISK_DOWNLOAD_UA', body,
@@ -128,15 +132,18 @@ class TestSourcing(unittest.TestCase):
         body = src[idx:end]
         self.assertIn("task.pause_requested", body,
                       "下载循环没消费 pause_requested，暂停永远不会生效")
-        self.assertIn("raise _NetdiskPaused()", body)
-        _start = body.find("except _NetdiskPaused")
-        self.assertNotEqual(_start, -1, "缺 _NetdiskPaused 处理分支")
-        _next = body.find("    except ", _start + 1)
-        # 只截到下一个 except —— 后面的 except Exception 本来就该 unlink part
-        paused_block = body[_start:_next if _next != -1 else len(body)]
-        self.assertNotIn("part.unlink", paused_block,
+        # 2026-10-28 并发化后：暂停在 worker 循环里消费，收尾落 paused 并**保留** part+位图
+        _p = body.find("if task.pause_requested:")
+        self.assertNotEqual(_p, -1, "并发路径收尾缺 pause_requested 分支")
+        _tail = body[_p:body.find("if fatal or any(", _p)]
+        self.assertNotIn("part.unlink", _tail,
                          "暂停分支不得删除 part（那是取消分支的行为）")
-        self.assertIn('"ab" if append else "wb"', body,
+        self.assertIn('status="paused"', _tail)
+        # 串行兜底（拿不到总长时）仍用异常上抛，续传必须 206 追加、200 覆盖重下
+        _j = src.find("def _download_netdisk_serial(")
+        ser = src[_j:src.find("\ndef ", _j + 10)]
+        self.assertIn("raise _NetdiskPaused()", ser)
+        self.assertIn('"ab" if resume_from else "wb"', ser,
                       "续传必须 206 才追加，200 全量必须覆盖重下")
 
     def test_cancel_covers_paused_state(self):

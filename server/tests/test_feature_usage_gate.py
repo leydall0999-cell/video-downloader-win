@@ -84,41 +84,30 @@ CROSS_END_RESOURCES: dict[str, str] = {
 
 
 def _web_dev_source(rel_path: str) -> str:
-    """读 web-dev 分支上的文件内容；取不到返回空串。
+    """读**网页版仓**里的文件内容；取不到返回空串。
 
-    🔴 2026-10-06：优先读 **web-dev 工作树**的实际文件（`git worktree list`
-    定位），而不是 `git show web-dev:...` —— 后者只能看到**已提交**的内容，
-    两端同批改动时（网页端已改、尚未 commit）会读到旧版而误报「无拦截点」；
-    工作树定位失败才回退 git show（覆盖 web-dev 未 checkout 的场景）。
+    🔴 2026-10-29：三仓拆分后 `web-dev` 分支/worktree 都已不存在（旧法
+    `git worktree list` + `git show web-dev:...` 恒空 ⇒ 6 个跨端资源全部误报红灯）。
+    改为按**工作树路径**找网页版仓（读实际文件，仍含未提交改动）：
+      ① 环境变量 `VDL_WEB_REPO`
+      ② 默认同级目录 `<repo 上级>/video-downloader`（= 网页版仓）
+    两处都读不到就返回空串 ⇒ 该资源判为无拦截点，守卫照旧会红，
+    不会因为「本机没 clone 网页版」而静默放过。
     """
-    import subprocess
-    # ① 定位 web-dev 工作树，直接读文件（含未提交改动）
-    try:
-        out = subprocess.run(
-            ["git", "worktree", "list", "--porcelain"],
-            cwd=str(_SERVER.parent), capture_output=True, timeout=20,
-        ).stdout.decode("utf-8", "ignore")
-        cur = None
-        for line in out.splitlines():
-            if line.startswith("worktree "):
-                cur = line[len("worktree "):].strip()
-            elif line.startswith("branch ") and cur:
-                b = line[len("branch "):].strip()   # refs/heads/web-dev
-                if b.rsplit("/", 1)[-1] == "web-dev":
-                    p = pathlib.Path(cur) / rel_path
-                    if p.exists():
-                        return p.read_text(encoding="utf-8", errors="ignore")
-                cur = None
-    except Exception:
-        pass
-    # ② 回退：git show 已提交的 web-dev 分支内容
-    try:
-        return subprocess.run(
-            ["git", "show", f"web-dev:{rel_path}"],
-            cwd=str(_SERVER.parent), capture_output=True, timeout=20,
-        ).stdout.decode("utf-8", "ignore")
-    except Exception:
-        return ""
+    import os
+    roots: list[pathlib.Path] = []
+    env = (os.environ.get("VDL_WEB_REPO") or "").strip()
+    if env:
+        roots.append(pathlib.Path(env))
+    roots.append(_SERVER.parent.parent / "video-downloader")
+    for root in roots:
+        p = root / rel_path
+        try:
+            if p.is_file():
+                return p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+    return ""
 
 
 def _app_compute_keys() -> set[str]:

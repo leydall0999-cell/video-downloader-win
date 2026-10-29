@@ -42,7 +42,7 @@ ok(!/_POOL_EXTRA_DOMAINS = \{[^}]*baidu\.com/.test(poolJs),
 ok(/ds \|= \{_strip_sub\(d\) for d in _CONTRIB_ONLY_DOMAINS if _strip_sub\(d\)\}/.test(poolJs),
   '_root_domains() 未纳入 _CONTRIB_ONLY_DOMAINS ⇒ is_allowed 会拒收百度');
 ok(/def is_contrib_only\(/.test(poolJs), '缺少 is_contrib_only()（自动同步排除判据）');
-ok(/if d != "chrqj\.com" and not is_contrib_only\(d\)\]/.test(appPy.replace(/#.*$/gm, '')),
+ok(/def _sync_domains_to_cloud[\s\S]*?not is_contrib_only\(d\)[\s\S]*?for idx, domain in enumerate\(domains\)/.test(appPy.replace(/#.*$/gm, '')),
   '_sync_domains_to_cloud 未排除 contrib-only 域 ⇒ 会自动把用户浏览器里的百度 Cookie 推上云（同意权事故）');
 ok(/if is_contrib_only\(domain\):/.test(appPy.replace(/#.*$/gm, '')),
   '/api/cookie/sync/from-local 未拒收 contrib-only 域（隐式读取浏览器登录态的通道不能碰百度）');
@@ -61,7 +61,7 @@ ok(/@router\.post\('\/api\/cloud-drive\/contribute'\)/.test(routerJs),
   '缺少 POST /api/cloud-drive/contribute 端点');
 // 2026-10-27 文案定档：所有失败上屏统一 baidu.USER_ERROR_TEXT（细节只进日志），
 // 所以这里断言「守卫结构 + 统一文案常量」，不再绑死旧的那句中文。
-ok(/header = get_baidu_bduss\(\) or ""[\s\S]{0,300}if not header:[\s\S]{0,300}return \{"ok": False, "error": baidu\.USER_ERROR_TEXT\}/.test(routerJs),
+ok(/get_baidu_bduss\(\) or ""[\s\S]{0,400}if not stored:[\s\S]{0,300}return \{"ok": False, "error": baidu\.USER_ERROR_TEXT\}/.test(routerJs),
   '贡献前必须先有手动保存的 BDUSS（不能顺手抓一份就共享），无 BDUSS 须以统一文案拒绝');
 ok(/ok, info = baidu_probe\(header\)[\s\S]{0,160}if ok is False:/.test(routerJs),
   '贡献前必须验真，验伪必须拒（不把过期 BDUSS 共享出去）');
