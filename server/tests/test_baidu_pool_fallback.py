@@ -38,6 +38,16 @@ os.environ.setdefault("VDL_CLOUD_LINK", "0")
 
 from credential_store import clear_baidu_bduss, set_baidu_bduss  # noqa: E402
 from cookie_pool import _pool_file, get_cookie, is_allowed, is_contrib_only  # noqa: E402
+import cookie_pool as _cp  # noqa: E402
+
+# 🔴 上面的环境变量只在「本文件是第一个 import cookie_pool 的模块」时生效。
+#    用 pytest 全量收集时，cookie_pool 往往已被别的用例先 import，`_POOL_DIR` 在
+#    import 那一刻就固化成真实目录了 ⇒ 下面 `pool_file.write_text(...)` 会把假条目
+#    写进**用户的真实池**（2026-10-29 实际发生：真实池里多出
+#    `BDUSS=POOLSHARED123` 的 contrib 垃圾，解析时白试一个不存在的账号，并让
+#    「会员优先」的候选表出现幽灵条目）。直接在 import 后覆写常量，pytest 与
+#    `python3 tests/test_baidu_pool_fallback.py` 两种跑法都安全。
+_cp._POOL_DIR = Path(os.environ["VDL_COOKIE_POOL_DIR"])
 
 
 def test_pool_fallback_and_priority():

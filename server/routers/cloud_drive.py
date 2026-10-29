@@ -311,34 +311,80 @@ def _baidu_local_cookies() -> list:
     return picked
 
 
+# 云端共享池账号的会员等级缓存：本机池的 member 标记只覆盖「入过本机池」的账号，
+# 云端号永远认不出会员（见 _cloud_member_bduss）。探测本身是一次网络请求/号，
+# 不能每次解析都发，进程内缓存 15 分钟足够（会员等级不会分钟级变化）。
+_CLOUD_VIP_MEM: dict = {"ts": 0.0, "bduss": set()}
+_CLOUD_VIP_TTL: float = 900.0
+
+
+def _cloud_member_bduss(cloud: list) -> set:
+    """云端共享池候选里「实测是会员」的 BDUSS 集合（进程内 15 分钟缓存）。
+
+    🔴 2026-10-29 用户实测根因：本机池的 member 标记只在入池时用 baidu_probe 打，
+    云端共享池的账号从没进过本机池，所以 `member_bduss_set` 里永远没有它们 ——
+    「会员优先」对云端号完全失效。表现就是：本机有一条免费号（或已失效的号）时，
+    云端那枚超会号被当普通号排到最后，个人网盘通道第一个（免费）就成功返回，
+    下载全程走免费带宽。
+
+    云端池通常只有个位数账号，这里现探一次补上会员标记，结果缓存复用。
+    """
+    if not cloud:
+        return set()
+    now = time.time()
+    if now - float(_CLOUD_VIP_MEM.get("ts") or 0) < _CLOUD_VIP_TTL:
+        return set(_CLOUD_VIP_MEM.get("bduss") or ())
+
+    found: set = set()
+    try:
+        from cookie_pool import baidu_probe
+    except Exception:  # noqa: BLE001 — 池模块不可用就当没有会员号
+        return set()
+    for c in cloud:
+        try:
+            ok, info = baidu_probe(c)
+            if ok and int((info or {}).get("vip_type") or 0) > 0:
+                bd = _bduss_of(c)
+                if bd:
+                    found.add(bd)
+        except Exception:  # noqa: BLE001 — 单个号探测失败不影响其他号
+            continue
+    _CLOUD_VIP_MEM["ts"] = now
+    _CLOUD_VIP_MEM["bduss"] = found
+    return found
+
+
 def _baidu_login_cookies() -> list:
-    """解析用候选（首选在前）：本机全部 → 云端共享池（别人显式贡献的账号）。
+    """解析用候选（首选在前）：本机 + 云端共享池，**统一按会员优先排序**。
 
     `_baidu_login_cookie()` 仍返回第一条，供单条场合（如「是否已配置登录态」）。
 
     排序契约（两条都要守住）：
-      1. **本机候选整体排在云端候选之前** —— 自己的账号（尤其会员带宽）不该被别人的
-         号抢在前面（2026-10-28 测试守护）；
-      2. 🔴🔴 **会员优先（2026-10-29 用户实测根因修复）**：候选原本只按「Cookie 字段数
-         降序」，完全不看会员等级 —— 于是字段更少的会员 cookie 被字段更多的免费 cookie
-         压在后面，个人网盘下载（任何账号都给明文直链）直接用了免费号、单连 ~128KB/s。
-         把「会员账号排最前」作为主键，字段数只作同档内的次级排序：SVIP 等会员账号
-         无论字段多少都优先，分享 + 个人网盘两条通道都走会员快通道。
-    两条不冲突：local / cloud 各自按 (会员, 字段数) 排序，再拼成 local 在前。
+      1. 🔴🔴 **会员优先是全局主键，跨本机/云端生效**（2026-10-29 二次根因修复）：
+         上一版把「本机整体在前」当成硬约束，会员只做了**组内**排序 —— 本机只要有一条
+         免费号（哪怕它是已失效的）就压在云端超会号前面，会员带宽永远轮不到。
+      2. **非会员档内本机仍排在云端之前**：全是免费号时，用户自己的账号不该被别人贡献
+         的号抢前面。注意必须把「来源」写进排序键，不能只靠稳定排序 —— 字段数是变量，
+         sort 会把字段更多的云端免费号提到本机免费号前面（test_router_login_cookies_
+         appends_cloud_after_local 就是钉这个的）。
+
+    最终键：`(是否会员, 来源[本机=0/云端=1], -字段数)`。
+    云端号的会员等级靠 _cloud_member_bduss 现探 + 缓存补上（本机池里没有它们的标记）。
     """
-    member_bduss = member_bduss_set("baidu.com")
-    _member_key = lambda c: (0 if _bduss_of(c) in member_bduss else 1, _baidu_rank_key(c))
+    member_bduss = set(member_bduss_set("baidu.com"))
 
     local = _baidu_local_cookies()
-    local.sort(key=_member_key)  # 本机组内也做会员优先（用户自己的多个浏览器账号都在本机）
-
-    # 云端共享池兜底（2026-10-28 打通）：排在本机全部候选**之后** ——
-    # 自己的登录态（尤其会员带宽）不该被别人的号抢在前面。
     cloud = _dedupe_baidu(_baidu_cloud_cookies())
-    cloud.sort(key=_member_key)
     seen = {_baidu_key(c) for c in local}
-    local.extend(c for c in cloud if _baidu_key(c) not in seen)
-    return local
+    cloud = [c for c in cloud if _baidu_key(c) not in seen]
+
+    member_bduss |= _cloud_member_bduss(cloud)
+
+    tagged = [(c, 0) for c in local] + [(c, 1) for c in cloud]
+    tagged.sort(key=lambda it: (0 if _bduss_of(it[0]) in member_bduss else 1,
+                                it[1],
+                                _baidu_rank_key(it[0])))
+    return [c for c, _ in tagged]
 
 
 @router.post('/api/cloud-drive/contribute')

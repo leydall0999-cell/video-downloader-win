@@ -87,15 +87,71 @@ def test_without_member_mark_order_degrades_to_field_count(monkeypatch):
     assert rt._baidu_login_cookies() == [b, c, a]
 
 
-def test_cloud_candidates_still_come_after_local(monkeypatch):
-    """会员优先不能打破「本机候选整体在云端之前」这条老契约。"""
-    local_free = _header("LOCAL_FREE", 3)
+def test_cloud_member_ranks_before_local_free(monkeypatch):
+    """🔴 2026-10-29 二次根因：云端会员号必须压过本机免费号。
+
+    上一版把「本机整体在前」当硬约束，只做组内会员排序 —— 本机有一条免费号（实际
+    是本机唯一那条、且已 errno=-6 失效）就永远排在云端超会号前面，会员带宽形同不存在。
+    """
+    local_free = _header("LOCAL_FREE", 9)
     cloud_member = _header("CLOUD_MEMBER", 2)
 
     monkeypatch.setattr(rt, "_baidu_local_cookies", lambda: [local_free])
     monkeypatch.setattr(rt, "_baidu_cloud_cookies", lambda: [cloud_member])
-    monkeypatch.setattr(rt, "member_bduss_set", lambda domain: {"CLOUD_MEMBER"})
+    monkeypatch.setattr(rt, "member_bduss_set", lambda domain: set())
+    # 云端号的会员标记不在本机池，靠现探补上
+    monkeypatch.setattr(rt, "_cloud_member_bduss", lambda cloud: {"CLOUD_MEMBER"})
 
     out = rt._baidu_login_cookies()
-    assert out[0] == local_free, "云端会员号抢到了本机候选前面"
-    assert out[1] == cloud_member
+    assert out[0] == cloud_member, "云端会员号没压过本机免费号"
+    assert out[1] == local_free
+
+
+def test_same_tier_local_still_before_cloud(monkeypatch):
+    """全是非会员时，本机候选仍排在云端之前（稳定排序保序，契约 2）。"""
+    local_free = _header("LOCAL_FREE", 3)
+    cloud_free = _header("CLOUD_FREE", 3)
+
+    monkeypatch.setattr(rt, "_baidu_local_cookies", lambda: [local_free])
+    monkeypatch.setattr(rt, "_baidu_cloud_cookies", lambda: [cloud_free])
+    monkeypatch.setattr(rt, "member_bduss_set", lambda domain: set())
+    monkeypatch.setattr(rt, "_cloud_member_bduss", lambda cloud: set())
+
+    out = rt._baidu_login_cookies()
+    assert out == [local_free, cloud_free], f"同档内顺序被打乱：{[c[:14] for c in out]}"
+
+
+def test_cloud_member_bduss_probes_and_caches(monkeypatch):
+    """云端号的会员等级靠现探确认，且结果缓存（不能每次解析都打一遍百度）。"""
+    member = _header("CLOUD_VIP", 3)
+    free = _header("CLOUD_FREE", 3)
+    calls = []
+
+    def fake_probe(cookie):
+        calls.append(cookie)
+        return True, {"vip_type": 2 if "CLOUD_VIP" in cookie else 0, "errno": 0}
+
+    monkeypatch.setattr(cookie_pool, "baidu_probe", fake_probe)
+    monkeypatch.setitem(rt._CLOUD_VIP_MEM, "ts", 0.0)
+    monkeypatch.setitem(rt._CLOUD_VIP_MEM, "bduss", set())
+
+    assert rt._cloud_member_bduss([member, free]) == {"CLOUD_VIP"}
+    assert len(calls) == 2
+
+    # 第二次走缓存，不再探测
+    assert rt._cloud_member_bduss([member, free]) == {"CLOUD_VIP"}
+    assert len(calls) == 2, "缓存没生效，第二次又去探测了百度"
+
+
+def test_cloud_probe_failure_does_not_break_ordering(monkeypatch):
+    """单个云端号探测抛异常时，排序照常（当非会员处理），不能整条链路挂掉。"""
+    bad = _header("CLOUD_BAD", 3)
+
+    def boom(cookie):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(cookie_pool, "baidu_probe", boom)
+    monkeypatch.setitem(rt._CLOUD_VIP_MEM, "ts", 0.0)
+    monkeypatch.setitem(rt._CLOUD_VIP_MEM, "bduss", set())
+
+    assert rt._cloud_member_bduss([bad]) == set()
