@@ -92,7 +92,11 @@ jobs:
           #    无法实例化 job（秒败、无日志）——千万别搬进 if。
           ssh-key: ${{ secrets.COMMENTARY_DEPLOY_KEY }}
           ssh-known-hosts: github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-          token: ${{ secrets.COMMENTARY_PAT }}
+          # 🔴 2026-10-29：token 必须非空，即使走 ssh-key —— checkout@v4 的
+          #    `token` 是 required 输入，缺了会在「Input required and not supplied:
+          #    token」秒败（COMMENTARY_PAT 已不再配置，只剩 Deploy Key）。
+          #    ssh 模式下该 token 只用于满足校验，git 走的是 SSH Deploy Key。
+          token: ${{ secrets.COMMENTARY_PAT || secrets.GITHUB_TOKEN }}
           path: commentary-pipeline
           fetch-depth: 0
 
