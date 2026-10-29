@@ -6854,6 +6854,10 @@ def _netdisk_output_name(task: DownloadTask, content_type: str, final_url: str) 
 # 用单元素 list 而非 global 变量，方便在嵌套函数里改写。
 _NETDISK_CONN_HINT: list[int] = [0]
 _NETDISK_CONN_DEFAULT = 16
+# 下限 10：百度是 per-connection 限速，连接数就是唯一杠杆，压到个位数等于自废武功。
+# 2026-10-29 17:34 实测教训：撞 403 后 16→8→4 并写进水位，之后每次下载都从 4 起步，
+# 用户看到的就是「连接数死死卡在 4」。宁可用退避重试扛住 403，也不降到 10 以下。
+_NETDISK_CONN_MIN = 10
 _NETDISK_CONN_MAX = 32
 
 
@@ -6870,9 +6874,9 @@ def _netdisk_conn_count(total: int, chunk: int, ua: str = "") -> int:
     只认浏览器 UA（P2SP UA 回 403 user is not authorized），所以那条「按通道分档」
     实际等于给**所有**网盘下载设了 4 连上限 —— Mac 侧跑 24 连，当然快得多。
 
-    现在改自适应：默认 16 起，单次下载内撞限流自动减半（最少 2）并记住这档水位，
-    跑通且零 403 时下次再抬 8 档（上限 32）。安全性不靠拍脑袋压并发，而靠
-    403 退避重试 + 单连接补漏 + 断点保留。
+    现在改自适应：默认 16 起，单次下载内撞限流每 3 次降 1/4 档（**下限 10 条**）并记住
+    这档水位，跑通且零 403 时下次再抬 8 档（上限 32）。安全性不靠压并发，而靠
+    403 退避重试 + 单连接补漏 + 断点保留 —— 降并发只治标，少一半连接就少一半速度。
     `VDL_NETDISK_CONN` 仍可覆盖（设 1 即退回单连接）。小文件按块数收敛 ——
     每条连都要重握手 + 慢启动，开太多更慢（实测 1MB 块 16 连只有 1.51MB/s，
     4MB 块 16 连 5.33MB/s）。
@@ -6882,7 +6886,7 @@ def _netdisk_conn_count(total: int, chunk: int, ua: str = "") -> int:
     if raw.isdigit() and int(raw) > 0:
         want = int(raw)
     else:
-        want = _NETDISK_CONN_HINT[0] or _NETDISK_CONN_DEFAULT
+        want = max(_NETDISK_CONN_MIN, _NETDISK_CONN_HINT[0] or _NETDISK_CONN_DEFAULT)
     return max(1, min(want, blocks, _NETDISK_CONN_MAX))
 
 
@@ -7258,9 +7262,10 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
                             dropped = 0
                             with lock:
                                 seen403[0] += 1
-                                # 每撞 3 次限流降一档（最少 2 条），档位记进水位
-                                if seen403[0] % 3 == 0 and limit[0] > 2:
-                                    limit[0] = max(2, limit[0] // 2)
+                                # 每撞 3 次限流降 1/4 档，但**不低于 10 条**（10~32 区间）
+                                if seen403[0] % 3 == 0 and limit[0] > _NETDISK_CONN_MIN:
+                                    limit[0] = max(_NETDISK_CONN_MIN,
+                                                   limit[0] - max(2, limit[0] // 4))
                                     _NETDISK_CONN_HINT[0] = limit[0]
                                     dropped = limit[0]
                                 # 指数式全局冷却：第一批等 3s，持续撞就 6/12/24s

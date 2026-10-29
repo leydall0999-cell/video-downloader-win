@@ -239,42 +239,53 @@ def test_netdisk_403_keeps_resume_state(tmp_path, monkeypatch):
 
 
 def test_netdisk_conn_count_is_adaptive(monkeypatch):
-    """并发不再按 UA 分档，改为自适应水位（v1.1.1 的「浏览器 UA→4 连」是错的）。
+    """并发区间锁定 10~32：百度按「每条连接」限速，连接数就是唯一的提速杠杆。
 
-    2026-10-29 15:40 用户实测：界面显示「4 连接 / 509KB/s」，而 Mac 侧 24 连。
-    原因：分享链接换出的 dlink 几乎只认浏览器 UA，于是「按通道分档」等于把**所有**
-    网盘下载都压到 4 连。现在默认 16，撞限流才降，降过就记住。
+    历史两次翻车都记在这里：
+    - v1.1.1「浏览器 UA → 4 连」：分享链接换出的 dlink 几乎只认浏览器 UA，
+      这条规则等于给所有网盘下载设 4 连上限；
+    - 2026-10-29 17:34：撞 403 后 16→8→4 并写进水位，之后每次下载都从 4 起步，
+      用户看到「连接数死死卡在 4」。现在下限硬性 10，绝不再往个位数掉。
     """
     chunk = 4 * 1024 * 1024
     big = chunk * 200
 
     monkeypatch.delenv("VDL_NETDISK_CONN", raising=False)
     monkeypatch.setattr(dl, "_NETDISK_CONN_HINT", [0])
-    # UA 不再影响档位
+
+    assert dl._NETDISK_CONN_MIN == 10 and dl._NETDISK_CONN_MAX == 32
+    # UA 不参与档位决策
     assert dl._netdisk_conn_count(big, chunk, "netdisk;P2SP;3.0.20.138") == 16
     assert dl._netdisk_conn_count(big, chunk, "Mozilla/5.0 (Macintosh) Chrome/131") == 16
 
     # 小文件按块数收敛，不开多余连接
     assert dl._netdisk_conn_count(chunk * 2, chunk, "Mozilla/5.0 Chrome/131") == 2
 
-    # 水位记忆：上次撞限流降到 8，下次就从 8 起
-    dl._NETDISK_CONN_HINT[0] = 8
-    assert dl._netdisk_conn_count(big, chunk, "Mozilla/5.0 Chrome/131") == 8
+    # 水位低到 8/4/1 也必须被抬回下限 10
+    for low in (8, 4, 1):
+        dl._NETDISK_CONN_HINT[0] = low
+        assert dl._netdisk_conn_count(big, chunk, "Mozilla/5.0 Chrome/131") == 10
 
-    # 环境变量仍然可以强行覆盖（排查用），且不超过硬上限 32
+    # 水位高过硬上限就压回 32
+    dl._NETDISK_CONN_HINT[0] = 48
+    assert dl._netdisk_conn_count(big, chunk, "Mozilla/5.0 Chrome/131") == 32
+
+    # 环境变量仍可覆盖（排查用），且不超过硬上限
     monkeypatch.setenv("VDL_NETDISK_CONN", "24")
     assert dl._netdisk_conn_count(big, chunk, "Mozilla/5.0 Chrome/131") == 24
     monkeypatch.setenv("VDL_NETDISK_CONN", "64")
     assert dl._netdisk_conn_count(big, chunk, "Mozilla/5.0 Chrome/131") == 32
+    monkeypatch.setenv("VDL_NETDISK_CONN", "1")
+    assert dl._netdisk_conn_count(big, chunk, "Mozilla/5.0 Chrome/131") == 1
 
 
 def test_netdisk_shrinks_connections_on_403(tmp_path, monkeypatch):
-    """持续撞 403 就往下降并发，而不是硬顶到任务作废。"""
+    """撞 403 降档，但只能降到 10 条为止（再低就是白送速度）。"""
     import threading as _th
 
     ch = 256 * 1024
     total = ch * 24
-    quota = {"left": 6}          # 前 6 次请求一律 403，模拟限流窗口
+    quota = {"left": 9}          # 前 9 次请求 403，够触发两次降档
     lock = _th.Lock()
 
     def fake_get(url, headers=None, **kw):
@@ -293,8 +304,8 @@ def test_netdisk_shrinks_connections_on_403(tmp_path, monkeypatch):
     monkeypatch.setattr(dl, "_pick_netdisk_ua", lambda *a, **kw: "Mozilla/5.0 Chrome/131")
     monkeypatch.setattr(dl, "_netdisk_sleep", lambda s: None)
     monkeypatch.setattr(dl, "_NETDISK_CONN_HINT", [0])
+    monkeypatch.delenv("VDL_NETDISK_CONN", raising=False)
     monkeypatch.setenv("VDL_NETDISK_CHUNK", str(ch))
-    monkeypatch.setenv("VDL_NETDISK_CONN", "8")
 
     task, store = _Task(tmp_path), _Store()
     task.total_bytes = 0
@@ -304,4 +315,5 @@ def test_netdisk_shrinks_connections_on_403(tmp_path, monkeypatch):
     assert (tmp_path / "demo.mp4").stat().st_size == total
     logs = " ".join(task.logs if hasattr(task, "logs") else [])
     assert "并发自动降到" in logs, logs[:300]
-    assert dl._NETDISK_CONN_HINT[0] < 8, "撞过限流后水位必须下调，下次别再顶"
+    assert dl._NETDISK_CONN_HINT[0] == dl._NETDISK_CONN_MIN, dl._NETDISK_CONN_HINT
+    assert dl._NETDISK_CONN_HINT[0] >= 10, "水位掉到 10 以下就等于把速度砍掉一半以上"
