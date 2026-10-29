@@ -1260,6 +1260,11 @@ run_pytest_root test_clouddrive_ui_wiring.py
 run_pytest_root test_netdisk_download_options.py
 # 网盘直链必须「按文件直下」：走 yt-dlp 会把标题换成直链路径段、mp3 存成 mp4
 run_pytest_root test_netdisk_direct_download.py
+# 撞百度瞬时风控（403）后的自动断点续传：只认「seen403>0」的风控中断才冷却重试，
+# 链接失效/磁盘满绝不重试（2026-10-29）
+run_pytest_root test_netdisk_auto_resume.py
+# 会员 Cookie 优先：候选排序主键从「字段数」改成「会员 → 字段数」（2026-10-29 根因修复）
+run_pytest_root test_baidu_member_priority.py
 # aria2c 默认 --enable-cookie=false，会静默吞掉 --header 传进来的 Cookie ⇒ 需要登录态的源 403
 run_pytest_root test_aria2_cookie_args.py
 run_pytest_root test_commentary_config.py
@@ -1271,6 +1276,7 @@ run_pytest_root test_cookie_cache.py
 # 「未检测到登录态」——用户以为是自己没登录，实际是解密/枚举/挑 profile 出了问题。
 # 这类故障没有异常、没有日志，只能靠用例把每一环的契约钉死（离线，不碰真实浏览器数据）。
 run_pytest_root test_browser_cookies.py
+run_pytest_root test_harvest_baidu_browser_cookies.py # 多 profile 浏览器抓取：逐个 profile 全量入池（2026-10-29）
 run_root test_cookie_pool_bilibili.py
 run_pytest_root test_cookie_sync_ratelimit.py
 run_root test_crypto_unit.py

@@ -85,7 +85,9 @@ class TestSourcing(unittest.TestCase):
         head = src[idx:idx + 1200]
         self.assertIn("_is_netdisk_direct(task.url)", head,
                       "run_download 没有网盘直链短路，会继续走 yt-dlp 解析")
-        self.assertIn("_download_netdisk_direct(", head)
+        # 网盘直链短路到 _netdisk_run（它内部再调 _download_netdisk_direct，
+        # 并包了撞 403 风控后的自动续传）；只要不是落到 yt-dlp 解析即可。
+        self.assertIn("_netdisk_run(", head)
 
     def test_direct_download_headers(self):
         """直链下载的三个硬要求（2026-10-24 实测，缺一即 403）：

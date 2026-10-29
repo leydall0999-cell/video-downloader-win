@@ -513,6 +513,43 @@ def get_cookies(domain: str, limit: int = 8) -> list:
     return out
 
 
+def member_bduss_set(domain: str) -> set:
+    """返回该域被标记为会员(vip_type>0)的账号 BDUSS 集合。
+
+    会员优先排序用：解析网盘时，候选账号要「会员排最前」。池子入池时已用
+    baidu_probe 打了 member 标记（add_cookie），这里直接读标记，避免每条候选
+    都再发一次网络探测。过期条目（>_TTL）不计。
+    """
+    out: set = set()
+    for d in _candidates(domain):
+        f = _pool_file(d)
+        if not f.exists():
+            continue
+        try:
+            data = json.loads(f.read_text())
+        except Exception:
+            continue
+        for c in data.get("cookies", []):
+            if not c.get("member"):
+                continue
+            if time.time() - c.get("ts", 0) > _TTL:
+                continue
+            header = _decrypt_item(c)
+            bd = _bduss_of(header)
+            if bd:
+                out.add(bd)
+    return out
+
+
+def _bduss_of(header: str) -> str:
+    """从 Cookie 请求头里取 BDUSS 值（会员优先排序 / 去重用）。"""
+    for part in (header or "").split(";"):
+        k, _, v = part.partition("=")
+        if k.strip() == "BDUSS":
+            return v.strip()
+    return ""
+
+
 def _mark_used(f: Path, header: str) -> None:
     """把这条 Cookie 标记为「刚被用过」（后台「最近一次使用」列的数据源）。
 

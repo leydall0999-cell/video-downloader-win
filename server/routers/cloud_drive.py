@@ -26,6 +26,10 @@ from pydantic import BaseModel
 from cloud_drives import baidu
 from credential_store import get_baidu_bduss, set_baidu_bduss
 
+# 会员优先排序 + BDUSS 提取（Change 1，2026-10-29 根因修复）：必须在模块级可见，
+# _baidu_login_cookies 与 _baidu_local_cookies 都用到，函数内局部 import 不会外泄到调用方作用域。
+from cookie_pool import _bduss_of, member_bduss_set  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -231,6 +235,28 @@ def _dedupe_baidu(cands) -> list:
     return picked
 
 
+# 多 profile 浏览器抓取冷却（2026-10-29）：枚举本机全部浏览器 profile（Chrome/Edge/UC/QQ/
+# 360 …）逐个解密入库，很慢，不能每次解析都跑。进程内冷却 10 分钟，既保证「首次解析就把
+# 用户多个浏览器的百度账号全抓进池」，又避免高频重复解密 + 重复验真打百度接口。
+# 解析主流程只在冷却到期时才触发，平时直接读已入池的候选。
+_HARVEST_TS: float = 0.0
+_HARVEST_INTERVAL: float = 600.0  # 秒
+
+
+def _ensure_browser_baidu_harvest() -> None:
+    """进程内冷却后，全量抓取本机浏览器百度登录态入池（幂等、可失败）。"""
+    global _HARVEST_TS
+    now = time.time()
+    if now - _HARVEST_TS < _HARVEST_INTERVAL:
+        return
+    _HARVEST_TS = now
+    try:
+        import downloader
+        downloader.harvest_baidu_browser_cookies()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _baidu_local_cookies() -> list:
     """**本机**百度登录态候选（字段多的在前）：手动保存 → 本机缓存 → 浏览器 → 本机池。
 
@@ -264,6 +290,12 @@ def _baidu_local_cookies() -> list:
         pass
 
     # 本机共享池：全部候选（池里可能混着普通号，交给解析器逐个试）
+    # 🔴 先全量抓一遍浏览器（冷却 10 分钟一次）：把每个浏览器 profile 各自的百度登录态
+    # 都入池，否则只靠 find_source 只会进一个账号，会员优先排序也无从挑起。
+    try:
+        _ensure_browser_baidu_harvest()
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from cookie_pool import get_cookies
         out.extend(get_cookies("pan.baidu.com") or [])
@@ -283,13 +315,27 @@ def _baidu_login_cookies() -> list:
     """解析用候选（首选在前）：本机全部 → 云端共享池（别人显式贡献的账号）。
 
     `_baidu_login_cookie()` 仍返回第一条，供单条场合（如「是否已配置登录态」）。
+
+    排序契约（两条都要守住）：
+      1. **本机候选整体排在云端候选之前** —— 自己的账号（尤其会员带宽）不该被别人的
+         号抢在前面（2026-10-28 测试守护）；
+      2. 🔴🔴 **会员优先（2026-10-29 用户实测根因修复）**：候选原本只按「Cookie 字段数
+         降序」，完全不看会员等级 —— 于是字段更少的会员 cookie 被字段更多的免费 cookie
+         压在后面，个人网盘下载（任何账号都给明文直链）直接用了免费号、单连 ~128KB/s。
+         把「会员账号排最前」作为主键，字段数只作同档内的次级排序：SVIP 等会员账号
+         无论字段多少都优先，分享 + 个人网盘两条通道都走会员快通道。
+    两条不冲突：local / cloud 各自按 (会员, 字段数) 排序，再拼成 local 在前。
     """
+    member_bduss = member_bduss_set("baidu.com")
+    _member_key = lambda c: (0 if _bduss_of(c) in member_bduss else 1, _baidu_rank_key(c))
+
     local = _baidu_local_cookies()
+    local.sort(key=_member_key)  # 本机组内也做会员优先（用户自己的多个浏览器账号都在本机）
 
     # 云端共享池兜底（2026-10-28 打通）：排在本机全部候选**之后** ——
     # 自己的登录态（尤其会员带宽）不该被别人的号抢在前面。
     cloud = _dedupe_baidu(_baidu_cloud_cookies())
-    cloud.sort(key=_baidu_rank_key)
+    cloud.sort(key=_member_key)
     seen = {_baidu_key(c) for c in local}
     local.extend(c for c in cloud if _baidu_key(c) not in seen)
     return local
@@ -423,3 +469,29 @@ def cloud_drive_set_credential(req: CloudDriveCredentialReq) -> dict:
 @router.get('/api/cloud-drive/credential/status')
 def cloud_drive_credential_status() -> dict:
     return {"set": bool(get_baidu_bduss()) or bool(_baidu_login_cookie())}
+
+
+@router.post('/api/cloud-drive/harvest-browser-cookies')
+def cloud_drive_harvest_browser_cookies() -> dict:
+    """立刻全量重扫本机浏览器百度登录态（每个浏览器 profile 各自入池）。
+
+    与 `_baidu_local_cookies` 里冷却 10 分钟的「静默自动抓取」不同，这是用户/前端
+    主动触发的「现在就扫一遍」，绕过冷却，用于「刚登录了新账号、想立刻用上」的场景。
+    返回本次抓到的账号数（去重后）。任何浏览器读不出都跳过，绝不影响其他来源。
+    """
+    n = 0
+    try:
+        import downloader
+        from cookie_pool import _bduss_of as _bduss_of_header
+        headers = downloader.harvest_baidu_browser_cookies()
+        # 去重到登录会话（BDUSS），返回真实账号数而非 header 条数
+        seen: set = set()
+        for h in headers or []:
+            b = _bduss_of_header(h)
+            if b and b not in seen:
+                seen.add(b)
+                n += 1
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[cloud_drive] harvest browser cookies 失败：%s", str(e)[:200])
+    logger.info("[cloud_drive] harvest browser cookies 触发，账号数=%s", n)
+    return {"ok": True, "accounts": n}
