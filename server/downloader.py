@@ -1464,15 +1464,58 @@ _NETDISK_UA_CANDIDATES: tuple[str, ...] = (_NETDISK_DOWNLOAD_UA, _NETDISK_UA)
 _netdisk_ua_hint: str = ""
 
 
-def _pick_netdisk_ua(url: str, cookie: str, proxy: str) -> str:
-    """探测哪个 UA 能取到百度直链（返回可用的 UA，全失败则回默认）。
+_UA_PROBE_BYTES = 512 * 1024      # 初选采样量：够看出「每连限速档位」，又不心疼流量
+_UA_PROBE_SECONDS = 2.5
 
-    用 `Range: bytes=0-0`（1 字节）探，代价极小；命中后记进进程级 hint，
-    同一台机器后续下载直接复用，不再重复探测。
+
+def _ua_throughput(url: str, ua: str, cookie: str, proxies, sample: int,
+                   seconds: float) -> float:
+    """按该 UA 实际拉一段数据，返回 MB/s（不可用/异常一律 0）。
+
+    🔴 为什么要测速而不是只测「能不能过」（2026-10-29 实测）：
+    同一账号、同一条 dlink 上，浏览器 UA 与非 P2SP UA 都可能回 206，
+    但浏览器 UA 在正式 4MB 分块时**大量 403**（实测 8 连 0 字节），
+    而 P2SP UA 稳定 0.27~0.45MB/s/连。旧逻辑「先探 1 字节、第一个能过就用」
+    会选中浏览器 UA ⇒ 整个下载变成 403 退避循环（端到端只剩 1.4MB/s）。
+    """
+    import time as _t  # noqa: PLC0415
+
+    import requests  # noqa: PLC0415
+
+    h = {"User-Agent": ua, "Range": f"bytes=0-{sample - 1}"}
+    if cookie:
+        h["Cookie"] = cookie
+    got, t0 = 0, _t.time()
+    try:
+        r = requests.get(url, headers=h, proxies=proxies, stream=True,
+                         timeout=(10, 20), allow_redirects=True)
+        try:
+            if r.status_code not in (200, 206):
+                return 0.0
+            for chunk in r.iter_content(65536):
+                if not chunk:
+                    break
+                got += len(chunk)
+                if got >= sample or _t.time() - t0 >= seconds:
+                    break
+        finally:
+            r.close()
+    except Exception:  # noqa: BLE001
+        return 0.0
+    el = max(_t.time() - t0, 0.05)
+    return got / 1048576 / el
+
+
+def _pick_netdisk_ua(url: str, cookie: str, proxy: str) -> str:
+    """挑一个「能用且最快」的 UA 下直链（全失败则回默认）。
+
+    两步：① `Range: bytes=0-0` 确认该 UA 能不能过（一个 RTT）；
+    ② 通过的再实拉 512KB 测速，取最快的那个。
+    排序结果记进进程级 hint，同一进程后续下载直接复用（百度探测有频控，别每次都试）。
     """
     global _netdisk_ua_hint
     candidates = list(_NETDISK_UA_CANDIDATES)
-    if _netdisk_ua_hint in candidates:      # 上次成功的优先
+    if _netdisk_ua_hint in candidates:      # 上次选中的优先试
         candidates.remove(_netdisk_ua_hint)
         candidates.insert(0, _netdisk_ua_hint)
     proxies = {"http": proxy, "https": proxy} if proxy else None
@@ -1480,6 +1523,7 @@ def _pick_netdisk_ua(url: str, cookie: str, proxy: str) -> str:
         import requests
     except Exception:  # pragma: no cover
         return candidates[0]
+    scored: list[tuple[float, str]] = []
     for ua in candidates:
         try:
             h = {"User-Agent": ua, "Range": "bytes=0-0"}
@@ -1495,14 +1539,23 @@ def _pick_netdisk_ua(url: str, cookie: str, proxy: str) -> str:
                 except Exception:
                     pass
             r.close()
-            if ok:
-                _netdisk_ua_hint = ua
-                logger.info("[网盘] 直链 UA 协商成功：%s", ua)
-                return ua
-            logger.info("[网盘] UA 不可用（%s）：%s %s", ua[:24], r.status_code, detail)
+            if not ok:
+                logger.info("[网盘] UA 不可用（%s）：%s %s", ua[:24], r.status_code, detail)
+                continue
+            rate = _ua_throughput(url, ua, cookie, proxies,
+                                  _UA_PROBE_BYTES, _UA_PROBE_SECONDS)
+            logger.info("[网盘] UA 可用（%s）实测 %.2fMB/s", ua[:24], rate)
+            scored.append((rate, ua))
         except Exception as exc:  # noqa: BLE001
             logger.info("[网盘] UA 探测异常（%s）：%s", ua[:24], str(exc)[:80])
-    return candidates[0]
+    if not scored:
+        return candidates[0]
+    scored.sort(key=lambda x: -x[0])
+    _netdisk_ua_hint = scored[0][1]
+    if len(scored) > 1:
+        logger.info("[网盘] 直链 UA 选定 %.2fMB/s 的那个（对照 %.2fMB/s）",
+                    scored[0][0], scored[1][0])
+    return _netdisk_ua_hint
 
 
 def _is_netdisk_direct(url_or_host: str) -> bool:
