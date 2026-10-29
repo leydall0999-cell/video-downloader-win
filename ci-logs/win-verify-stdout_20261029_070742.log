@@ -1,0 +1,32 @@
+2026-10-29 07:07:30,533 INFO CORS \u5df2\u5f00\u542f\uff0c\u5141\u8bb8\u6765\u6e90\uff1a*
+fitz\__init__.py:17: FutureWarning: The `fitz` API is deprecated and will be removed in future. Use `import pymupdf` instead.
+  warnings.warn(
+2026-10-29 07:07:31,753 WARNING \u66f4\u65b0\u6e90\u4f7f\u7528\u660e\u6587 HTTP\uff08http://8.138.223.3:8765\uff09\u3002\u6e05\u5355\u7b7e\u540d\u5df2\u5f3a\u5236\u542f\u7528\u53ef\u9632\u7be1\u6539\uff1b\u4ecd\u5efa\u8bae\u5c3d\u5feb\u6539\u4e3a HTTPS\u3002
+INFO:     Started server process [1036]
+INFO:     Waiting for application startup.
+2026-10-29 07:07:31,799 WARNING [cookie_pool] \u57df\u540d baidu.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,800 WARNING [cookie_pool] \u57df\u540d bilibili.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,800 WARNING [cookie_pool] \u57df\u540d chenzhongtech.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+INFO:     Application startup complete.
+2026-10-29 07:07:31,801 WARNING [cookie_pool] \u57df\u540d chrqj.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,802 WARNING [cookie_pool] \u57df\u540d douyin.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+INFO:     Uvicorn running on http://127.0.0.1:8321 (Press CTRL+C to quit)
+2026-10-29 07:07:31,803 WARNING [cookie_pool] \u57df\u540d gifshow.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,803 WARNING [cookie_pool] \u57df\u540d iesdouyin.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,803 WARNING [cookie_pool] \u57df\u540d instagram.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,803 WARNING [cookie_pool] \u57df\u540d kuaishou.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,804 WARNING [cookie_pool] \u57df\u540d nmwchxx.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,804 WARNING [cookie_pool] \u57df\u540d qq.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,804 WARNING [cookie_pool] \u57df\u540d tiktok.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,804 WARNING [cookie_pool] \u57df\u540d xhslink.cn \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,805 WARNING [cookie_pool] \u57df\u540d xhslink.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,805 WARNING [cookie_pool] \u57df\u540d xiaohongshu.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,805 WARNING [cookie_pool] \u57df\u540d youku.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+2026-10-29 07:07:31,805 WARNING [cookie_pool] \u57df\u540d youtube.com \u516c\u5171 Cookie \u6c60\u5df2\u7a7a/\u5168\u90e8\u5931\u6548\uff0c\u7f51\u9875\u7248 chrqj \u5c06 403\uff0c\u8bf7\u8865\u5145 Cookie\uff08App \u7aef\u300e\u540c\u6b65 Cookie \u5230\u4e91\u7aef\u300f\u6216\u8bbe CHRQJ_COOKIE\uff09
+INFO:     127.0.0.1:55553 - "GET /api/version HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55554 - "GET /api/system/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55555 - "GET /api/version HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55556 - "GET /api/system/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55557 - "GET /api/system/changelog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55558 - "GET /api/tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55559 - "GET /api/sniffer/status HTTP/1.1" 200 OK
