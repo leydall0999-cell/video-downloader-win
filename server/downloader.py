@@ -6850,6 +6850,13 @@ def _netdisk_output_name(task: DownloadTask, content_type: str, final_url: str) 
     return base
 
 
+# 并发水位记忆（进程级）：上次跑通时用的连接数，下次直接从这里起步。
+# 用单元素 list 而非 global 变量，方便在嵌套函数里改写。
+_NETDISK_CONN_HINT: list[int] = [0]
+_NETDISK_CONN_DEFAULT = 16
+_NETDISK_CONN_MAX = 32
+
+
 def _netdisk_conn_count(total: int, chunk: int, ua: str = "") -> int:
     """并发连接数（百度直链限速是 per-connection，只能靠叠加连接提速）。
 
@@ -6858,24 +6865,25 @@ def _netdisk_conn_count(total: int, chunk: int, ua: str = "") -> int:
     每连接恒定 ~0.30MB/s，近似线性 ⇒ **连接数是唯一有效杠杆**，账号等级只决定单连接
     基线（本机非会员 0.09~0.15）。
 
-    🔴 并发数必须看**走哪条通道**（2026-10-29 15:07 实测翻车）：UA 协商有时会命中
-    浏览器 UA（分享链接换出的 dlink 只认它），那是百度的「网页下载」通道 —— 对并发
-    最敏感，24 连跑到第 15 块就开始回 **HTTP 403**；同一台机器、同一时段，`netdisk;P2SP`
-    客户端通道 32 连毫无 403。所以浏览器 UA 一律压到 4 连，P2SP 才给 12。
-    `VDL_NETDISK_CONN` 可覆盖（设 1 即退回单连接）。并发档再撞 403 也有兜底：
-    主循环跑完后缺失的块转**单连接补漏**，且断点保留。
-    小文件按块数收敛 —— 每条连都要重握手 + 慢启动，开太多更慢
-    （实测 1MB 块 16 连只有 1.51MB/s，4MB 块 16 连 5.33MB/s）。
+    🔴 v1.1.1 的「浏览器 UA → 4 连」是个错误，已撤（2026-10-29 15:40 用户实测
+    「还是跟 mac 差很多」，界面显示 4 连接 / 509KB/s）：分享链接换出的 dlink 几乎
+    只认浏览器 UA（P2SP UA 回 403 user is not authorized），所以那条「按通道分档」
+    实际等于给**所有**网盘下载设了 4 连上限 —— Mac 侧跑 24 连，当然快得多。
+
+    现在改自适应：默认 16 起，单次下载内撞限流自动减半（最少 2）并记住这档水位，
+    跑通且零 403 时下次再抬 8 档（上限 32）。安全性不靠拍脑袋压并发，而靠
+    403 退避重试 + 单连接补漏 + 断点保留。
+    `VDL_NETDISK_CONN` 仍可覆盖（设 1 即退回单连接）。小文件按块数收敛 ——
+    每条连都要重握手 + 慢启动，开太多更慢（实测 1MB 块 16 连只有 1.51MB/s，
+    4MB 块 16 连 5.33MB/s）。
     """
     blocks = max(1, (total + chunk - 1) // chunk)
-    is_client = "netdisk;" in (ua or "").lower()
-    ceiling = 12 if is_client else 4
     raw = (os.environ.get("VDL_NETDISK_CONN") or "").strip()
     if raw.isdigit() and int(raw) > 0:
         want = int(raw)
     else:
-        want = ceiling if blocks >= ceiling else max(2, blocks)
-    return max(1, min(want, blocks, 64))
+        want = _NETDISK_CONN_HINT[0] or _NETDISK_CONN_DEFAULT
+    return max(1, min(want, blocks, _NETDISK_CONN_MAX))
 
 
 class _NetdiskHTTPError(RuntimeError):
@@ -7124,6 +7132,7 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
             q.put(i)
 
     nconn = _netdisk_conn_count(total, CHUNK, headers.get("User-Agent", ""))
+    limit = [nconn]               # 当前允许的活动连接数（撞限流会就地打折）
     stop = threading.Event()
     lock = threading.Lock()
     done = [done_base]
@@ -7204,7 +7213,7 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
             pass
         return base + random.uniform(0, 1.0)
 
-    def _worker() -> None:
+    def _worker(idx: int) -> None:
         try:
             wf = open(part, "r+b")
         except OSError as exc:
@@ -7220,6 +7229,9 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
         sess.trust_env = False
         try:
             while not stop.is_set():
+                # 撞过限流后水位会降，超编的 worker 直接退役（不再抢新块）
+                if idx >= limit[0]:
+                    return
                 if task.cancel_requested or task.is_finished or task.pause_requested:
                     stop.set()
                     return
@@ -7243,12 +7255,23 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
                     except _NetdiskHTTPError as exc:
                         err = exc
                         if exc.status == 403:
+                            dropped = 0
                             with lock:
                                 seen403[0] += 1
+                                # 每撞 3 次限流降一档（最少 2 条），档位记进水位
+                                if seen403[0] % 3 == 0 and limit[0] > 2:
+                                    limit[0] = max(2, limit[0] // 2)
+                                    _NETDISK_CONN_HINT[0] = limit[0]
+                                    dropped = limit[0]
                                 # 指数式全局冷却：第一批等 3s，持续撞就 6/12/24s
                                 cool_until[0] = max(
                                     cool_until[0],
                                     time.time() + min(3.0 * (2 ** attempt), 24.0))
+                            if dropped:
+                                logger.info("[netdisk] 403 限流 %d 次，并发降到 %d 条",
+                                            seen403[0], dropped)
+                                task.log(f"百度限流（403 已 {seen403[0]} 次），"
+                                         f"并发自动降到 {dropped} 条继续")
                         elif exc.status == 416:
                             break
                         _netdisk_sleep(_backoff(attempt, exc.retry_after))
@@ -7265,7 +7288,8 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
             except OSError:
                 pass
 
-    threads = [threading.Thread(target=_worker, daemon=True) for _ in range(nconn)]
+    threads = [threading.Thread(target=_worker, args=(i,), daemon=True)
+               for i in range(nconn)]
     for t in threads:
         t.start()
     for t in threads:
@@ -7376,8 +7400,22 @@ def _download_netdisk_direct(task: DownloadTask, store: TaskStore,
     size = out.stat().st_size
     elapsed = max(time.time() - started, 0.001)
     avg = (size - done_base) / elapsed / 1048576
+    used = max(limit[0], 1)
+    per_conn = avg / used
+    # 水位学习：零 403 说明这档还能再抬，撞过限流就把打折后的档位留作下次起点
+    if seen403[0] == 0 and nconn >= used and used == nconn and used < _NETDISK_CONN_MAX:
+        _NETDISK_CONN_HINT[0] = min(_NETDISK_CONN_MAX, nconn + 8)
+    elif seen403[0] == 0:
+        _NETDISK_CONN_HINT[0] = used
     task.add_step("下载文件", "done", f"输出文件：{out.name}")
-    task.log(f"网盘下载完成：{out.name}（{size} 字节，{nconn} 连接并发，均速 {avg:.2f}MB/s）")
+    task.log(f"网盘下载完成：{out.name}（{size} 字节，{used} 连接并发，"
+             f"均速 {avg:.2f}MB/s，每连 {per_conn:.2f}MB/s）")
+    if per_conn < 0.18:
+        # 单连只有 0.1MB/s 量级 ⇒ 账号不是超会，或线路正被限速；加连接才有用
+        logger.info("[netdisk] 单连速率偏低（%.2fMB/s，%d 连），"
+                    "账号可能非超会或线路限速", per_conn, used)
+        task.log(f"单连速率只有 {per_conn:.2f}MB/s（偏慢）：账号可能不是超会会员，"
+                 f"或这一时段被限速；把超会账号加入账号池能明显变快")
     store.update(task.id, status="completed", progress=100.0, filepath=out,
                  filename=out.name, filesize=size, downloaded_bytes=size,
                  total_bytes=size, speed=0.0, eta=0)
