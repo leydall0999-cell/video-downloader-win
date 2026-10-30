@@ -1,0 +1,143 @@
+{
+  "installer": "VideoDownloader-Setup-1.1.06.exe",
+  "expect_version": "1.1.06",
+  "install_dir": "C:\\VDLVerify",
+  "A_installer": true,
+  "B_runtime": true,
+  "C_uninstall": true,
+  "all_pass": true,
+  "rows": [
+    {
+      "level": "A",
+      "item": "installer file exists",
+      "ok": true,
+      "detail": "288341719 bytes"
+    },
+    {
+      "level": "A",
+      "item": "silent install exit code",
+      "ok": true,
+      "detail": "rc=0 stderr=b''"
+    },
+    {
+      "level": "A",
+      "item": "VideoDownloader.exe installed",
+      "ok": true,
+      "detail": "C:\\VDLVerify"
+    },
+    {
+      "level": "A",
+      "item": "installed files indexed",
+      "ok": true,
+      "detail": "1390 files"
+    },
+    {
+      "level": "A",
+      "item": "dir _internal/ present",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "level": "A",
+      "item": "dir web/ present (root or _internal/)",
+      "ok": true,
+      "detail": "C:\\VDLVerify\\_internal\\web"
+    },
+    {
+      "level": "A",
+      "item": "version.txt matches",
+      "ok": true,
+      "detail": "found='1.1.06' want='1.1.06'"
+    },
+    {
+      "level": "A",
+      "item": "ffmpeg.exe executes",
+      "ok": true,
+      "detail": "ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the F"
+    },
+    {
+      "level": "A",
+      "item": "ffprobe.exe executes",
+      "ok": true,
+      "detail": "ffprobe version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2007-2026 the"
+    },
+    {
+      "level": "A",
+      "item": "deno.exe executes",
+      "ok": true,
+      "detail": "deno 2.9.7 (stable, release, x86_64-pc-windows-msvc)\nv8 15.0.245.2-rusty\ntypescr"
+    },
+    {
+      "level": "A",
+      "item": "aria2c.exe executes",
+      "ok": true,
+      "detail": "aria2 version 1.37.0\nCopyright (C) 2006, 2019 Tatsuhiro Tsujikawa\n\nThis program"
+    },
+    {
+      "level": "B",
+      "item": "backend responds on 127.0.0.1",
+      "ok": true,
+      "detail": "port=8321"
+    },
+    {
+      "level": "B",
+      "item": "/api/version matches installer",
+      "ok": true,
+      "detail": "got='v1.1.06 · 构建 d2a60fe @ 10-30 16:17' want='1.1.06'"
+    },
+    {
+      "level": "B",
+      "item": "/api/system/info platform == windows",
+      "ok": true,
+      "detail": "platform='windows' http=200"
+    },
+    {
+      "level": "B",
+      "item": "/api/version reachable",
+      "ok": true,
+      "detail": "http=200"
+    },
+    {
+      "level": "B",
+      "item": "/api/system/info reachable",
+      "ok": true,
+      "detail": "http=200"
+    },
+    {
+      "level": "B",
+      "item": "/api/system/changelog reachable (best-effort)",
+      "ok": true,
+      "detail": "http=200"
+    },
+    {
+      "level": "B",
+      "item": "/api/tasks reachable (best-effort)",
+      "ok": true,
+      "detail": "http=200"
+    },
+    {
+      "level": "B",
+      "item": "/api/sniffer/status reachable (best-effort)",
+      "ok": true,
+      "detail": "http=200"
+    },
+    {
+      "level": "B",
+      "item": "runtime config dir under %APPDATA%",
+      "ok": true,
+      "detail": "C:\\Users\\runneradmin\\AppData\\Roaming\\VideoDownloader"
+    },
+    {
+      "level": "C",
+      "item": "uninstall exit code",
+      "ok": true,
+      "detail": "rc=0"
+    },
+    {
+      "level": "C",
+      "item": "VideoDownloader.exe removed",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}
