@@ -110,12 +110,15 @@ import json, sys, os
 from pathlib import Path
 
 repo, ver, out, url, size, sha, notes_file = sys.argv[1:8]
+# 🔴 显式给了 notes 文件就以它为准（**空文件 = 更新说明留白**），不再兜底默认文案
+#    （2026-10-31 修：原先空文件会走进「性能优化与问题修复」兜底，等于替用户代写）。
+explicit_notes = bool(notes_file and Path(notes_file).is_file())
 notes_list = []
-if notes_file and Path(notes_file).is_file():
+if explicit_notes:
     notes_list = [ln.strip() for ln in Path(notes_file).read_text(encoding="utf-8").splitlines() if ln.strip()]
-if not notes_list and os.environ.get("VDL_RELEASE_NOTES"):
+elif os.environ.get("VDL_RELEASE_NOTES"):
     notes_list = [ln.strip() for ln in os.environ["VDL_RELEASE_NOTES"].splitlines() if ln.strip()]
-if not notes_list:
+if not notes_list and not explicit_notes:
     sys.path.insert(0, str(Path(repo) / "server"))
     try:
         from changelog import CHANGELOG
@@ -125,7 +128,7 @@ if not notes_list:
                 break
     except Exception:
         notes_list = []
-if not notes_list:
+if not notes_list and not explicit_notes:
     notes_list = ["性能优化与问题修复"]
 
 data = {
