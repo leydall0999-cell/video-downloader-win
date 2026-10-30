@@ -646,11 +646,14 @@ def flush_pending_usages(store) -> None:
         pass  # 仍离线：保留队列下次再试
 
 
-def report_demand_async(host: str, url: str = "", category: str = "unsupported_platform") -> None:
+def report_demand_async(host: str, url: str = "", category: str = "unsupported_platform",
+                        ts: int = 0) -> None:
     """解析失败需求上报授权中心（与本地落库并行；fire-and-forget）。
 
-    离线测试环境（pytest / VDL_OFFLINE_TESTS）直接跳过。中心已自带 账号×host
-    60s 节流，这里不再重复节。token 从会员引擎单例取，未登录（无 token）静默跳过。
+    ts=落库时间（resolve_demand.record_demand 传入）：云端按它落记录，历史
+    ts（>1h 前）在中心侧放行 60s 节流（补报语义）。成功后推进本地回填水位，
+    避免启动回填把同一条重报。离线测试环境（pytest / VDL_OFFLINE_TESTS）直接
+    跳过。token 从会员引擎单例取，未登录（无 token）静默跳过。
     """
     import os
     if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("VDL_OFFLINE_TESTS"):
@@ -662,6 +665,10 @@ def report_demand_async(host: str, url: str = "", category: str = "unsupported_p
     cat = str(category or "unsupported_platform")[:32]
     if cat not in ("pending_extractor", "unsupported_platform"):
         cat = "unsupported_platform"
+    try:
+        ts = int(ts or 0)
+    except (TypeError, ValueError):
+        ts = 0
 
     def _run() -> None:
         try:
@@ -673,13 +680,77 @@ def report_demand_async(host: str, url: str = "", category: str = "unsupported_p
             if not token:
                 return
             import license_client
-            license_client.demand_report_remote(
-                token, [{"host": h, "url": str(url or "")[:200], "category": cat}])
+            item: dict = {"host": h, "url": str(url or "")[:200], "category": cat}
+            if ts > 0:
+                item["ts"] = ts
+            license_client.demand_report_remote(token, [item])
+            if ts > 0:
+                import resolve_demand as _rd
+                _rd.mark_synced(ts)
         except Exception:
             pass
 
     try:
         threading.Thread(target=_run, daemon=True, name="vdl-demand-report").start()
+    except Exception:
+        pass
+
+
+def backfill_demand_to_center(max_batches: int = 20) -> dict:
+    """把本机解析需求日志里「云端没见过」的历史记录批量补报授权中心（回填）。
+
+    断点=resolve_demand 水位文件（已成功上报的最大 ts），只补水位之后的记录，
+    每批成功推进一次水位 ⇒ 重复调用 / 重启重跑都幂等。历史 ts 在中心侧放行
+    节流（>1h 前），不会 账号×host 60s 节流拦掉回填批量。未登录 / 离线 /
+    测试环境直接跳过。由启动钩子与后台「解析需求」刷新触发（后台线程）。
+    """
+    import os
+    if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("VDL_OFFLINE_TESTS"):
+        return {"ok": False, "reason": "offline_tests"}
+    try:
+        import app as _app
+        store = getattr(_app, "member_store", None)
+        if store is None:
+            return {"ok": False, "reason": "no_store"}
+        token = str(((store._state.get("meta") or {}).get("account") or {}).get("token") or "")
+        if not token:
+            return {"ok": False, "reason": "not_logged_in"}
+
+        import resolve_demand as _rd
+        import license_client
+        pending = _rd.pending_for_sync()
+        if not pending:
+            return {"ok": True, "sent": 0}
+        sent = 0
+        for i in range(0, len(pending), _rd.SYNC_BATCH):
+            if sent and i >= max_batches * _rd.SYNC_BATCH:
+                break  # 单次最多 max_batches 批，剩余下次（水位保证断点续传）
+            batch = pending[i:i + _rd.SYNC_BATCH]
+            r = license_client.demand_report_remote(
+                token, [{"host": it["host"], "url": it["url"],
+                         "category": it["category"], "ts": it["ts"]} for it in batch])
+            if not isinstance(r, dict) or not r.get("ok"):
+                return {"ok": False, "reason": "cloud_rejected", "sent": sent}
+            sent += len(batch)
+            _rd.mark_synced(batch[-1]["ts"])
+        return {"ok": True, "sent": sent}
+    except Exception as e:  # noqa: BLE001 - 回填是旁路，绝不影响主流程
+        return {"ok": False, "reason": type(e).__name__}
+
+
+def _backfill_demand_in_background() -> None:
+    """后台线程跑一次回填（启动钩子 / 管理面板刷新共用；fire-and-forget）。"""
+    import threading
+
+    def _run() -> None:
+        try:
+            backfill_demand_to_center()
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_run, daemon=True,
+                         name="vdl-demand-backfill").start()
     except Exception:
         pass
 

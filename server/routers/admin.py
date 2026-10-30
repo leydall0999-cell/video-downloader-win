@@ -727,6 +727,13 @@ def _merge_center_demand(rows: list, days: int) -> tuple[bool, list]:
 def admin_resolve_demand(days: int = 84, request: Request = None) -> dict[str, Any]:
     require_admin(request)
     import resolve_demand
+    # 管理员打开/刷新需求榜时顺带触发一次本机→云端回填（后台线程、水位幂等）：
+    # 本机历史需求（可能早于上报功能上线）补报后，下一刷 center 数据就齐了。
+    try:
+        from routers.cloud_account import _backfill_demand_in_background
+        _backfill_demand_in_background()
+    except Exception:
+        pass
     rows = resolve_demand.demand_summary(days=days)
     center_ok, merged = _merge_center_demand(rows, days)
     return {"ok": True, "days": days, "demand": merged,

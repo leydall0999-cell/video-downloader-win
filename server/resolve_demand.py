@@ -30,11 +30,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 LOG_NAME = ".resolve_demand.log"
+SYNC_MARKER_NAME = ".resolve_demand.synced"   # 云端回填wm：已成功上报的最大 ts
 DEFAULT_WINDOW_DAYS = 84           # 默认看 12 周：按周计数窗口太短会全是 1 分
 MAX_BYTES = 2 * 1024 * 1024          # 超限截断（保留尾部 KEEP_TAIL 行）
 KEEP_TAIL = 2000
 THROTTLE_SECONDS = 60.0              # 同 host 写入节流窗口
 MAX_URL_CHARS = 200
+SYNC_BATCH = 20                      # 回填单批条数（与中心 demand_report 上限一致）
+SYNC_MAX_BACKLOG = 400               # 单次回填最多补报的历史条数（防首回填爆量）
 
 _lock = threading.Lock()
 _last_write: dict[str, float] = {}   # host -> 上次落库 ts（进程内节流）
@@ -57,6 +60,64 @@ def _demand_path(base_dir: Path | None = None) -> Path:
     base = Path(base_dir) if base_dir else Path(
         os.environ.get("VDL_DATA_DIR") or (Path.home() / ".video-downloader"))
     return base / LOG_NAME
+
+
+def _synced_path(base_dir: Path | None = None) -> Path:
+    return _demand_path(base_dir).with_name(SYNC_MARKER_NAME)
+
+
+def last_synced_ts(base_dir: Path | None = None) -> float:
+    """云端回填水位：本机已成功上报到授权中心的最大记录 ts（无水位文件=0）。"""
+    try:
+        return float((_synced_path(base_dir).read_text(encoding="utf-8") or "0").strip() or 0)
+    except Exception:
+        return 0.0
+
+
+def mark_synced(ts: float, base_dir: Path | None = None) -> None:
+    """推进回填水位（只前进不后退）。失败静默——水位只是去重优化，丢了顶多重报。"""
+    try:
+        cur = last_synced_ts(base_dir)
+        ts = float(ts or 0)
+        if ts <= cur:
+            return
+        _synced_path(base_dir).write_text(str(int(ts)), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def pending_for_sync(base_dir: Path | None = None,
+                     limit: int = SYNC_MAX_BACKLOG) -> list[dict]:
+    """取本机日志里「水位之后」的记录（旧→新），供回填云端。
+
+    水位文件不存在时视为全量未同步（老用户首回填）。条数超 limit 取**最新**的
+    limit 条——回填目标是「近期持续需求」，远古积压放弃也不影响按周聚合口径。
+    """
+    path = _demand_path(base_dir)
+    if not path.exists():
+        return []
+    wm = last_synced_ts(base_dir)
+    out: list[dict] = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                ts = float(rec.get("ts") or 0)
+                host = str(rec.get("host") or "").strip().lower()
+                if ts <= wm or not host or "/" in host or " " in host:
+                    continue
+                out.append({"ts": int(ts), "host": host,
+                            "url": str(rec.get("url") or "")[:MAX_URL_CHARS],
+                            "category": str(rec.get("category") or "unsupported_platform")})
+    except Exception:
+        return []
+    return out[-max(1, limit):]
 
 
 def record_demand(host: str, url: str = "", category: str = "unsupported_platform",
@@ -98,9 +159,15 @@ def record_demand(host: str, url: str = "", category: str = "unsupported_platfor
     except Exception:
         return False
     # 真正落库的需求，异步上报授权中心（旁路信号，失败静默）。
+    # 第 4 参 ts=落库时间：实时上报与历史回填共用同一时间口径，云端按它落记录。
     if _reporter is not None:
         try:
-            _reporter(host, (url or "")[:MAX_URL_CHARS], category)
+            _reporter(host, (url or "")[:MAX_URL_CHARS], category, int(now))
+        except TypeError:
+            try:  # 兼容旧 3 参签名（不应出现，仅兜底）
+                _reporter(host, (url or "")[:MAX_URL_CHARS], category)
+            except Exception:
+                pass
         except Exception:
             pass
     return True

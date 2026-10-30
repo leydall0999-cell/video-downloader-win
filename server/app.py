@@ -2446,6 +2446,13 @@ async def lifespan(_: FastAPI):
         tts_guard.ensure_started()
     except Exception:
         logger.exception("启动配音引擎巡查失败")
+    # 解析需求历史回填授权中心（2026-10-31）：登录用户启动时把本机日志里云端
+    # 没见过的需求批量补报（水位断点幂等；未登录 / 离线 / 测试环境自动跳过）。
+    # 必须后台线程：要走网络，绝不能挡住服务监听。
+    try:
+        _cloud_rtr._backfill_demand_in_background()
+    except Exception:
+        logger.exception("启动解析需求回填失败")
     yield
     cleaner.cancel()
     if TORRENT_ENABLED:
