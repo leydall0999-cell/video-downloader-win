@@ -39,6 +39,19 @@ MAX_URL_CHARS = 200
 _lock = threading.Lock()
 _last_write: dict[str, float] = {}   # host -> 上次落库 ts（进程内节流）
 
+# 可选的上报钩子：注册后，每次「真的落库」的需求会异步上报到授权中心，
+# 实现 Mac/Win 需求统一收口（否则各端只看自己本机日志，互不可见）。
+_reporter = None
+
+
+def set_demand_reporter(fn) -> None:
+    """注册一个 ``(host, url, category) -> None`` 上报回调（由 cloud_account 注入）。
+
+    回调在后台线程里异步执行，异常一律静默，绝不影响主流程。
+    """
+    global _reporter
+    _reporter = fn
+
 
 def _demand_path(base_dir: Path | None = None) -> Path:
     base = Path(base_dir) if base_dir else Path(
@@ -84,6 +97,12 @@ def record_demand(host: str, url: str = "", category: str = "unsupported_platfor
                 f.write(line.encode("utf-8"))
     except Exception:
         return False
+    # 真正落库的需求，异步上报授权中心（旁路信号，失败静默）。
+    if _reporter is not None:
+        try:
+            _reporter(host, (url or "")[:MAX_URL_CHARS], category)
+        except Exception:
+            pass
     return True
 
 

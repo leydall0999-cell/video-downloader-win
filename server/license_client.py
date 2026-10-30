@@ -275,6 +275,47 @@ def usage_remote(email: str, admin_token: str, base_url: Optional[str] = None,
                  base_url, timeout)
 
 
+# ---- 解析需求榜 / 全站功能用量（2026-10-30「全端需求同步 + 全功能用量」）---- #
+def demand_report_remote(token: str, items: list, base_url: Optional[str] = None,
+                        timeout: float = 10.0,
+                        opener: Optional[Callable] = None) -> dict[str, Any]:
+    """桌面端解析失败需求上报授权中心（旁路信号，只落日志文件，不碰 license_data.json）。
+
+    items: [{host, url?, category?, ts?}]，最多 20 条/请求。中心按 账号×host 60s 节流。
+    """
+    return _post("/api/license/demand_report",
+                 {"token": token, "items": items},
+                 base_url, timeout, opener)
+
+
+def demand_query_remote(admin_token: str, days: int = 84,
+                       base_url: Optional[str] = None,
+                       timeout: float = 10.0,
+                       opener: Optional[Callable] = None) -> dict[str, Any]:
+    """管理员查授权中心聚合的**桌面端**解析需求榜（nodes=["app"]）。
+
+    授权中心是桌面 App 解析失败需求的统一收口（Mac/Win 经 demand_report 上报），
+    后台视图叠加这份数据，才能让「Windows 新需求」在「Mac 后台」也看得到。
+    """
+    return _post("/api/license/demand_query",
+                 {"token": admin_token, "days": int(days or 84)},
+                 base_url, timeout, opener)
+
+
+def usage_overview_remote(admin_token: str, days: int = 30,
+                         base_url: Optional[str] = None,
+                         timeout: float = 10.0,
+                         opener: Optional[Callable] = None) -> dict[str, Any]:
+    """管理员查**全站**功能用量聚合（功能侧重调整的数据底座）。
+
+    遍历所有账号的每日计数 + 历史归档，按 resource 汇总（不再只看本机 stats.json）。
+    返回 {ok, days, by_resource:{res:n}, by_day:{date:{res:n}}, active_users}。
+    """
+    return _post("/api/license/usage_overview",
+                 {"token": admin_token, "days": int(days or 30)},
+                 base_url, timeout, opener)
+
+
 def grant_remote(email: str, plan: str, admin_token: str, note: str = "",
                  base_url: Optional[str] = None,
                  timeout: float = 10.0) -> dict[str, Any]:

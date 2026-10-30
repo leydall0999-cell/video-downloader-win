@@ -646,6 +646,74 @@ def flush_pending_usages(store) -> None:
         pass  # 仍离线：保留队列下次再试
 
 
+def report_demand_async(host: str, url: str = "", category: str = "unsupported_platform") -> None:
+    """解析失败需求上报授权中心（与本地落库并行；fire-and-forget）。
+
+    离线测试环境（pytest / VDL_OFFLINE_TESTS）直接跳过。中心已自带 账号×host
+    60s 节流，这里不再重复节。token 从会员引擎单例取，未登录（无 token）静默跳过。
+    """
+    import os
+    if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("VDL_OFFLINE_TESTS"):
+        return
+    import threading
+    h = str(host or "").strip().lower()[:120]
+    if not h or "/" in h or " " in h:
+        return
+    cat = str(category or "unsupported_platform")[:32]
+    if cat not in ("pending_extractor", "unsupported_platform"):
+        cat = "unsupported_platform"
+
+    def _run() -> None:
+        try:
+            import app as _app
+            store = getattr(_app, "member_store", None)
+            if store is None:
+                return
+            token = str(((store._state.get("meta") or {}).get("account") or {}).get("token") or "")
+            if not token:
+                return
+            import license_client
+            license_client.demand_report_remote(
+                token, [{"host": h, "url": str(url or "")[:200], "category": cat}])
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="vdl-demand-report").start()
+    except Exception:
+        pass
+
+
+def report_feature_usage_cloud(resource: str, title: str = "", platform: str = "") -> None:
+    """纯积分 / 免配额功能成功后：把用量计到授权中心（不参与配额闸门）。
+
+    这些功能（本地一键抠图、图片·视频去水印、超分等）原先完全不上云 ⇒ 后台「使用详情」
+    只见下载。这里补上报，让「功能侧重调整」有全量数据底座。token 从会员引擎单例取，
+    调用方无需传 store；离线测试环境跳过。
+    """
+    import os
+    if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("VDL_OFFLINE_TESTS"):
+        return
+    try:
+        import app as _app
+        store = getattr(_app, "member_store", None)
+        if store is None:
+            return
+        report_usage_async(store, str(resource or "").strip()[:32], n=1,
+                           title=title, platform=platform)
+    except Exception:
+        pass
+
+
+# 注册需求上报钩子：任何 record_demand 真的落库时，都会异步推一份到授权中心，
+# 这样 Mac/Win 的解析需求在任一端后台都能看到（否则各看各的本机日志）。
+import resolve_demand as _RD  # noqa: E402
+try:
+    _RD.set_demand_reporter(report_demand_async)
+except Exception:  # noqa: BLE001
+    pass
+
+
 def _pub(store, extra: Optional[dict] = None) -> dict[str, Any]:
     out = {"ok": True, "account": store.account_view()}
     if extra:

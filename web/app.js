@@ -24331,9 +24331,21 @@ el.dwVidPlayer.hidden = true;
     // 配额资源键 → 中文（与套餐配置里的口径一致）；放在 openUserUsage 之前，
     // 避免 const 暂时性死区（虽然点击时已初始化完，但改顺序时容易踩）
     const _USAGE_RES_LABELS = {
-      download: '下载任务', original: '原画解析', batch_material: '批量素材',
-      matting: '一键抠图', cloud: '云端算力', app_compute: '本地重算力',
-      subtitle_extract: '字幕提取', compress: '文件压缩', sr: '超分',
+      // 桌面端 + 网页版统一资源键 → 中文（与会员中心套餐口径一致）
+      download: '视频下载', original: '原画解析', batch_material: '批量素材',
+      subtitle: '字幕提取', idphoto: '证件照', cloud_drive: '网盘下载',
+      share_qr: '生成二维码', share_page: '生成网页', cloud_commentary: '视频解说',
+      convert_video: '视频格式转换', convert_audio: '音乐转换', convert_image: '图片转换',
+      concat_video: '视频拼接', concat_audio: '音频拼接', compress: '高效压缩',
+      sr: '高清修复（图片）', sr_video: '视频超分', bridge: '音视频桥接',
+      matting: '一键抠图（本地）', matting_cloud: '一键抠图（云端）',
+      dewatermark: '图片/PDF 去水印', dewatermark_pdf: 'PDF 去水印', dewatermark_video: '视频去水印',
+      cloud: '云端算力', app_compute: '本地重算力',
+      // 网页版云端功能
+      cloud_convert: '在线转码', cloud_concat: '在线拼接',
+      cloud_dewatermark: '图片去水印（在线）', cloud_dewatermark_pdf: 'PDF 去水印（在线）',
+      cloud_subtitle: '字幕提取（在线）', cloud_subtitle_burn: '字幕烧录（在线）',
+      cloud_subtitle_translate: '字幕翻译（在线）',
     };
     const _usageResLabel = (k) => _USAGE_RES_LABELS[k] || k;
     // 云端当日用量（2026-10-18 修）：网页版 / 其它设备上的消耗记在授权中心
@@ -24905,21 +24917,20 @@ el.dwVidPlayer.hidden = true;
     const renderStats = (s) => {
       // 功能 kind → 中文标签（不展示英文埋点名；原始 kind 留在 title 悬浮）
       const _kindLabel = (k) => ({
-        download: '视频下载',
-        convert: '格式转换',
-        matting: '一键抠图（本地）',
-        matting_cloud: '一键抠图（云端）',
-        dewatermark: '图片去水印',
-        subtitle: '字幕提取',
-        compress: '文件压缩（完成）',
-        compress_submit: '文件压缩（提交）',
-        sr_video: '视频超分（完成）',
-        sr_submit: '视频超分（提交）',
-        register: '注册账号',
-        login: '登录',
-        change_pw: '修改密码',
-        reset_pw: '重置密码',
-        deactivate: '注销账号',
+        download: '视频下载', convert: '格式转换', convert_video: '视频格式转换',
+        convert_audio: '音乐转换', convert_image: '图片转换', concat_video: '视频拼接',
+        concat_audio: '音频拼接', compress: '高效压缩', compress_submit: '高效压缩（提交）',
+        sr: '高清修复（图片）', sr_video: '视频超分', sr_submit: '视频超分（提交）',
+        bridge: '音视频桥接', matting: '一键抠图（本地）', matting_cloud: '一键抠图（云端）',
+        dewatermark: '图片/PDF 去水印', dewatermark_pdf: 'PDF 去水印', dewatermark_video: '视频去水印',
+        subtitle: '字幕提取', idphoto: '证件照', cloud_drive: '网盘下载',
+        share_qr: '生成二维码', share_page: '生成网页', cloud_commentary: '视频解说',
+        cloud_convert: '在线转码', cloud_concat: '在线拼接',
+        cloud_dewatermark: '图片去水印（在线）', cloud_dewatermark_pdf: 'PDF 去水印（在线）',
+        cloud_subtitle: '字幕提取（在线）', cloud_subtitle_burn: '字幕烧录（在线）',
+        cloud_subtitle_translate: '字幕翻译（在线）',
+        register: '注册账号', login: '登录', change_pw: '修改密码',
+        reset_pw: '重置密码', deactivate: '注销账号', image_download: '图片下载',
       }[k] || k);
       if (statsSummary) {
         const total = s.total || 0;
@@ -24936,6 +24947,40 @@ el.dwVidPlayer.hidden = true;
         const rows = Object.keys(byKind).sort((a, b) => byKind[b] - byKind[a]).map((k) =>
           `<tr><td title="${esc(k)}">${esc(_kindLabel(k))}</td><td>${byKind[k]}</td></tr>`).join('');
         statsTable.innerHTML = head + '<tbody>' + (rows || '<tr><td colspan="2" class="admin-empty">暂无统计数据</td></tr>') + '</tbody>';
+      }
+      // 🔴 2026-10-30（用户要求「其他功能也要一起统计，方便功能侧重调整」）：
+      // 本机 by_kind 只含「本机埋点」的几个功能，且跨用户不可加总。真正的全功能、
+      // 全用户口径在授权中心 usage_overview（按账号聚合每日计数）—— 新增一张
+      // 「全站功能用量」卡片，直接驱动功能侧重决策。云端不可达时如实留空。
+      const ov = s.cloud_overview;
+      const ovBox = document.getElementById('adminCloudUsage');
+      if (ovBox && ov) {
+        const byRes = ov.by_resource || {};
+        const resKeys = Object.keys(byRes).sort((a, b) => byRes[b] - byRes[a]);
+        const ovHead = '<thead><tr><th>功能</th><th>总次数</th></tr></thead>';
+        const ovRows = resKeys.length
+          ? resKeys.map((k) => `<tr><td title="${esc(k)}">${esc(_kindLabel(k))}</td><td>${byRes[k]}</td></tr>`).join('')
+          : '<tr><td colspan="2" class="admin-empty">近 ' + (ov.days || 30) + ' 天暂无全站用量</td></tr>';
+        const byDay = ov.by_day || {};
+        const dayKeys = Object.keys(byDay).sort().reverse().slice(0, 14);
+        const dayRows = dayKeys.map((d) => {
+          const items = Object.keys(byDay[d] || {})
+            .map((k) => `${_kindLabel(k)} ${byDay[d][k]}`).join('、') || '—';
+          return `<tr><td>${esc(d)}</td><td>${esc(items)}</td></tr>`;
+        }).join('');
+        ovBox.innerHTML = '<div class="admin-stat-card"><b>' + (ov.active_users || 0) + '</b>'
+          + '<span>活跃用户（窗口内）</span></div>'
+          + '<div class="admin-stat-card"><b>' + resKeys.length + '</b><span>被使用的功能数</span></div>'
+          + '<div class="admin-table-wrap" style="max-height:300px;overflow:auto">'
+          + '<table class="admin-table aud-detail-table"><caption>功能总次数（近 ' + (ov.days || 30) + ' 天）</caption>'
+          + ovHead + '<tbody>' + ovRows + '</tbody></table></div>'
+          + (dayRows
+              ? '<div class="admin-table-wrap" style="max-height:300px;overflow:auto">'
+                + '<table class="admin-table aud-detail-table"><caption>每日用量明细（近 14 天）</caption>'
+                + '<thead><tr><th>日期</th><th>各功能次数</th></tr></thead><tbody>' + dayRows + '</tbody></table></div>'
+              : '');
+      } else if (ovBox) {
+        ovBox.innerHTML = '<div class="admin-empty">全站功能用量不可用（授权中心不可达或未配置管理员令牌）</div>';
       }
     };
 

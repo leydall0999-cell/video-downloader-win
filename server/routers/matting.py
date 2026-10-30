@@ -23,6 +23,15 @@ router = APIRouter()
 logger = logging.getLogger("matting")
 
 
+def _cloud_report(resource: str, title: str = "") -> None:
+    """纯积分功能用量补上报授权中心（抠图原先只落本机，云端用量榜看不到）。"""
+    try:
+        from routers.cloud_account import report_feature_usage_cloud
+        report_feature_usage_cloud(resource, title=title)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _credit_gate(request, op: str, sub: str | None = None, reason: str | None = None) -> str | None:
     """AI 积分门禁：按成本扣费，None=放行，字符串=拦截原因（供 402 detail）。"""
     store = app.current_member_store(request)
@@ -407,8 +416,10 @@ def create_matting_image(
     app.executor.submit(_run_matting, job_id, str(save_path), parsed_box, sel_model, vg, parsed_polygon, parsed_click, parsed_blocks, sr, prompt_text, kla, fc)
     if fc:
         record_event("matting_cloud", {"model": sel_model})
+        _cloud_report("matting_cloud", sel_model)
     else:
         record_event("matting", {"model": sel_model})
+        _cloud_report("matting", sel_model)
     return {"job_id": job_id, "status": "running", "kind": "matting", "box": parsed_box, "model": sel_model, "vision_guide": vg, "polygon": bool(parsed_polygon), "click": parsed_click, "blocks": bool(parsed_blocks), "sam_refine": sr}
 
 

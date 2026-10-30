@@ -4347,6 +4347,13 @@
           </div>
           <div id="adminStatsSummary" class="admin-stats-summary" data-page-node-id="7ycpvPy82mMdM8izlzvXaD"></div>
           <div class="admin-table-wrap" data-page-node-id="uZP0A8DCtb09CPlAFOovlk"><table class="admin-table" id="adminStatsTable" data-page-node-id="9esVCecTPmSHZ8dK68aU6o"></table></div>
+          <!-- 🔴 2026-10-30（用户要求「其他功能也要一起统计，方便功能侧重调整」）：
+               全站功能用量 = 授权中心按账号聚合的每日计数（含走免配额闸门的功能），
+               直接驱动「哪个功能用得多、哪个没人用」的决策。本机 by_kind 只含本机埋点、
+               且跨用户不可加总，不能当全站口径。云端不可达时面板如实提示。 -->
+          <div class="fq-sub" style="margin-top:18px" data-page-node-id="cloudUsageTitle">全站功能用量（近 30 天 · 跨所有用户）</div>
+          <p class="admin-hint" data-page-node-id="cloudUsageHint">数据来自授权中心全账号聚合，比本机统计更能反映真实功能侧重。抠图 / 去水印等纯积分功能此前完全不上云，本次已补齐上报。</p>
+          <div id="adminCloudUsage" data-page-node-id="cloudUsageBox">加载中…</div>
           <!-- 🔴 安装 / 插件统计（2026-10-13，用户要求「不同平台的统计，为后续计划做铺垫」）：
                数据源=授权中心设备记录（first_seen=安装时刻，platform/ext 随心跳上报）。
                本区块为接口先行版：只读聚合表，后续图表/下载次数在它上面长。 -->

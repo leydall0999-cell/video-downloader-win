@@ -20,6 +20,15 @@ router = APIRouter()
 DW_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 
 
+def _cloud_report(resource: str, title: str = "") -> None:
+    """纯积分功能用量补上报授权中心（去水印原先只落本机，云端用量榜看不到）。"""
+    try:
+        from routers.cloud_account import report_feature_usage_cloud
+        report_feature_usage_cloud(resource, title=title)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _save_upload(file, prefix: str) -> app.Path:
     """流式落盘上传文件到 DW_DIR，返回保存路径。"""
     suffix = app.Path(file.filename or "upload.bin").suffix.lower() or ".bin"
@@ -286,6 +295,7 @@ def create_dw_image(
     app.executor.submit(_run_image, job_id, str(save_path), regions_list, method, radius, engine,
                         bool(int(int8)), model, quality)
     record_event("dewatermark", {"kind": "image", "engine": engine, "quality": quality})
+    _cloud_report("dewatermark")
     return {"job_id": job_id, "status": "running", "kind": "image"}
 
 
@@ -458,6 +468,8 @@ def create_dw_pdf(
             "kind": "pdf",
         }
     app.executor.submit(_run_pdf, job_id, str(save_path), mode, regions_list, method, radius, dpi)
+    record_event("dewatermark", {"kind": "pdf", "mode": mode})
+    _cloud_report("dewatermark_pdf")
     return {"job_id": job_id, "status": "running", "kind": "pdf", "mode": mode}
 
 
@@ -792,6 +804,8 @@ def create_dw_video(
                         resolution, bool(int(smooth)), float(start_sec), float(end_sec), segments_list,
                         float(target_fps), int(temporal_stride),
                         work_dir, bool(int(int8)), model)
+    record_event("dewatermark_video", {"kind": "video", "model": model})
+    _cloud_report("dewatermark_video")
     return {"job_id": job_id, "status": "running", "kind": "video",
             "target_fps": float(target_fps)}
 

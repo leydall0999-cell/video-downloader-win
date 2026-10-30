@@ -618,7 +618,25 @@ def admin_credits(payload: dict[str, Any] = Body(...), request: Request = None) 
 @router.get("/api/admin/stats")
 def admin_stats(request: Request = None) -> dict[str, Any]:
     require_admin(request)
-    return {"ok": True, **usage_stats()}
+    out = {"ok": True, **usage_stats()}
+    # 叠加全站功能用量（授权中心按账号聚合，含走免配额闸门的功能，
+    # 不再只显示本机 stats.json 里那点下载量）。云端不可达时如实略过。
+    try:
+        from admin_store import _license_admin_token
+        tok = _license_admin_token()
+        if tok:
+            import license_client
+            ov = license_client.usage_overview_remote(tok, days=30)
+            if isinstance(ov, dict) and ov.get("ok"):
+                out["cloud_overview"] = {
+                    "by_resource": ov.get("by_resource") or {},
+                    "by_day": ov.get("by_day") or {},
+                    "active_users": ov.get("active_users") or 0,
+                    "days": ov.get("days") or 30,
+                }
+    except Exception:
+        pass
+    return out
 
 
 @router.get("/api/admin/stats/install")
@@ -666,12 +684,53 @@ def admin_config(request: Request = None) -> dict[str, Any]:
 # 解析失败（白名单空白站点 / 未知域名）自动落库后的聚合视图：按「站点×周」计数
 # （2026-10-23 起；原按天），重试免疫。用途：每月挑 Top 站点写成专用提取器——把
 # Downie「用户报一个写一个」的十年机制，变成我们可执行的开发排期输入。
+def _merge_center_demand(rows: list, days: int) -> tuple[bool, list]:
+    """拉授权中心 demand_query（桌面 App 经 demand_report 上报的需求榜）合并。
+
+    授权中心是桌面端需求的**唯一真源**（Mac/Win 各自本机日志已不再互通，且本机日志
+    也会上报到中心）。故以中心为准，本机日志只补「中心里没有」的离线 / 未登录需求，
+    避免本机与中心重复计数（本机需求已包含在中心里）。
+    中心不可达 / 未配 admin token → 退回本机日志（center_ok=False 明示，不阻断后台）。
+    """
+    from admin_store import _license_admin_token
+    tok = _license_admin_token()
+    if not tok:
+        return False, rows
+    try:
+        import license_client
+        r = license_client.demand_query_remote(tok, days=days)
+    except Exception:
+        return False, rows
+    if not isinstance(r, dict) or not r.get("ok"):
+        return False, rows
+    center_rows = r.get("demand") or []
+    if not center_rows:
+        # 中心可达但暂无数据：本机日志兜底（仍算 center_ok=True，不误导成「没配」）
+        return True, rows
+    # 中心为桌面端需求唯一真源（已含本机上报）；本机日志只补「中心没有」的
+    # 离线 / 未登录需求，避免本机与中心重复计数（本机需求已包含在中心里）。
+    by_host = {cr["host"]: dict(cr) for cr in center_rows}
+    for lr in rows:
+        h = lr.get("host")
+        if not h or h in by_host:
+            continue  # 中心已含本机上报的同站需求，跳过避免重复
+        row = dict(lr)
+        row["nodes"] = sorted(set(lr.get("nodes") or []) | {"local"})
+        by_host[h] = row
+    out = sorted(
+        by_host.values(),
+        key=lambda x: (-int(x.get("weeks_count") or 0), -float(x.get("last_ts") or 0)))
+    return True, out
+
+
 @router.get("/api/admin/resolve-demand")
 def admin_resolve_demand(days: int = 84, request: Request = None) -> dict[str, Any]:
     require_admin(request)
     import resolve_demand
     rows = resolve_demand.demand_summary(days=days)
-    return {"ok": True, "days": days, "demand": rows, "total_sites": len(rows)}
+    center_ok, merged = _merge_center_demand(rows, days)
+    return {"ok": True, "days": days, "demand": merged,
+            "total_sites": len(merged), "center_ok": center_ok}
 
 
 @router.post("/api/admin/config/smtp")
