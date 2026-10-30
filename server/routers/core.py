@@ -605,7 +605,11 @@ def create_download(payload: app.DownloadRequest, request: app.Request) -> dict:
     else:
         _runner = app.downloader.run_download
     task = app.store.create(url=url, title=(payload.title or ''), platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, concurrent_fragments=payload.concurrent_fragments, downloader_type=payload.downloader, cookie=_task_cookie, proxy=payload.proxy, play_url=payload.play_url, watch_options=payload.watch_options, is_hls=payload.is_hls, referer=(payload.referer or '').strip(), owner_id=app._task_owner(request))
-    app.scheduler.submit(_runner, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader)
+    # 断点接管（2026-10-30）：tasks.create 可能把「同链接上次没下完」的分片搬进了这个
+    # 新任务目录（用户重贴链接的常见路径）。此时必须以 resume=True 起执行器，否则
+    # yt-dlp 会忽略磁盘上的分片从 0 开始，接管就白做了。
+    _resume = (getattr(task, 'kind', 'video') == 'video') and app.downloader._has_partial(task.workdir)
+    app.scheduler.submit(_runner, task, app.store, payload.quality, payload.cookie, payload.proxy, app.SINGLE_DOWNLOAD_RETRIES, payload.format_id, payload.concurrent_fragments, payload.downloader, _resume)
     # 任务创建成功才计费（失败/被拒不烧免费额度）
     # 2026-10-19：带上标题与平台，后台「使用详情」能显示「下载了什么」而不是干巴巴的次数
     # 2026-10-20：把这次消耗的 ref 与账本挂到任务上 —— 下载结束后按同一 ref 回写
@@ -665,7 +669,8 @@ def create_batch(payload: BatchRequest, request: app.Request) -> dict:
             skipped += 1
             continue
         task = app.store.create(url=url, title='', platform=platform.name, quality=app.downloader.quality_label(payload.quality), quality_key=payload.quality, extract_mode=extract_mode, owner_id=app._task_owner(request))
-        app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, retries)
+        _b_resume = app.downloader._has_partial(task.workdir)
+        app.scheduler.submit(app.downloader.run_download, task, app.store, payload.quality, payload.cookie, payload.proxy, retries, '', task.concurrent_fragments, task.downloader_type, _b_resume)
         # 每个成功创建的任务计 1 次下载配额（2026-10-20：ref/账本挂任务，供结束后回写结果）
         _mb = app.current_member_store(request)
         _ch = _mb.use_daily('download', 1, title=url, platform=platform.name)

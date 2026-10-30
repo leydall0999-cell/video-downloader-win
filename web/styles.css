@@ -839,6 +839,21 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 .task-stats { font-size: .78rem; color: var(--text-mute); font-variant-numeric: tabular-nums; }
 .task-actions { display: flex; gap: .4rem; }
 .task-error { margin-top: .5rem; font-size: .8rem; color: #b91c1c; }
+/* 失败卡片里的「去粘贴 Cookie」小按钮（2026-10-30）：跟着文字走，不另起一行 */
+.task-error-act {
+  margin-left: .5rem;
+  padding: .1rem .45rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: .72rem;
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.task-error-act:hover { background: rgba(185, 28, 28, .1); }
 
 .commentary-status { margin-top: .5rem; font-size: .8rem; color: var(--brand-strong); }
 

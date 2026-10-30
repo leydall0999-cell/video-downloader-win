@@ -2495,9 +2495,29 @@
       const icon = CAT_ICON[cat] || '⚠️';
       const base = [task.error, task.hint].filter(Boolean).join(' — ');
       const tip = CAT_TIP[cat] ? `（${CAT_TIP[cat]}）` : '';
-      refs.error.textContent = `${icon} ${base}${tip}`;
+      // 卡片上直接给「下一步点哪儿」（2026-10-30）：顶部横幅早就随解析结果清掉了，
+      // 用户回头看卡片时只看到一句「需粘贴 Cookie」，却不知道「高级选项」在哪。
+      // 这三类错误唯一有效的下一步就是补登录态，所以直接把入口放这儿。
+      const needsCookie = (cat === 'cookie_required' || cat === 'cookie_invalid_or_expired'
+                           || cat === 'cdn_forbidden');
+      refs.error.replaceChildren(document.createTextNode(`${icon} ${base}${tip}`));
+      if (needsCookie) {
+        const act = document.createElement('button');
+        act.type = 'button';
+        act.className = 'task-error-act';
+        act.textContent = '去粘贴 Cookie';
+        act.addEventListener('click', () => {
+          const adv = document.getElementById('advToggle');
+          if (adv) adv.open = true;
+          const ci = document.getElementById('cookieInput');
+          if (ci) {
+            try { ci.focus(); ci.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {}
+          }
+        });
+        refs.error.appendChild(act);
+      }
     } else {
-      refs.error.textContent = '';
+      refs.error.replaceChildren();
     }
 
 

@@ -28,6 +28,11 @@ StepStatus = Literal["pending", "running", "done", "error"]
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "canceled"})
 
 TASK_TTL_SECONDS = 60 * 60  # 成品文件保留 1 小时
+# 🔴 断点保留期（2026-10-30）：1 小时只够「成品」，不够「断点」。
+#    用户最常做的不是点「继续下载」，而是**重新粘贴一遍链接**——那会 create 出新任务、
+#    新工作目录，旧分片就此孤悬（当天实测：314MB 下到 44.6%（169MB）后重贴链接从 0 开始）。
+#    现在给「失败 + 磁盘上确有分片」的任务 7 天保留期，重贴链接时能认领回来。
+RESUME_TTL_SECONDS = 7 * 24 * 60 * 60
 TASK_ID_LENGTH = 16
 TASK_DIR_PATTERN = re.compile(rf"^[0-9a-f]{{{TASK_ID_LENGTH}}}$")
 _MAX_LOG_LINES = 200
@@ -51,16 +56,27 @@ _PERSIST_FIELDS = (
 )
 
 
+_PARTIAL_SUFFIXES = (".part", ".aria2", ".ytdl")
+
+
+def _is_partial_name(name: str) -> bool:
+    """是不是「可续传的分片/控制文件」（与 downloader._has_partial 同口径）。
+
+    🔴 必须包含 `netdisk.part.map`（网盘断点的块位图）：它不以 `.part` 结尾，只靠后缀
+    判断会被漏掉 —— 于是 .part 搬走了、位图留在旧目录，续传会按全零位图重下已完成的块
+    （或直接判数据错）。用「含 `.part` 子串」覆盖 `.part` / `.part.map` / `.part-FragN`
+    这几类，同时不会误伤 `departure.mp4` 这种正常文件名（`.` 是名字的一部分）。
+    """
+    return name.endswith(_PARTIAL_SUFFIXES) or ".Frag" in name or ".part" in name
+
+
 def _has_partial_file(workdir: Path | None) -> bool:
     """工作目录里是否残留可续传的部分文件（与 downloader._has_partial 同口径，避免循环导入）。"""
     if not workdir or not workdir.is_dir():
         return False
     try:
         for p in workdir.iterdir():
-            if not p.is_file():
-                continue
-            name = p.name
-            if name.endswith((".part", ".aria2", ".ytdl")) or ".Frag" in name:
+            if p.is_file() and _is_partial_name(p.name):
                 return True
         return False
     except OSError:
@@ -375,6 +391,69 @@ class TaskStore:
         if restored:
             self._persist_locked(force=True)
 
+    def _adopt_resume_partials(self, *, url: str, workdir: Path, kind: str,
+                               owner_id: str, quality_key: str) -> DownloadTask | None:
+        """同一链接上次没下完 → 把残留分片搬进新任务目录，让这一单接着下。
+
+        为什么需要（2026-10-30 用户实测）：任务中断/失败后，用户在界面里做的动作通常
+        是**把链接再粘一遍**，而不是点「继续下载」。重贴 = 新 task_id = 新工作目录，
+        旧目录里的 .part / netdisk.part 虽然还在磁盘上，却永远接不上（169MB 白下）。
+
+        接管条件全部满足才动手：同一 URL、同一 kind、同一归属、旧任务已停下
+        （failed/canceled/paused —— 进行中的分片正在被写，不能抢）、旧目录确有分片。
+        只搬分片文件（同盘 rename，不产生拷贝），旧目录空了再连记录一起收掉，
+        避免列表里出现两张同链接的卡。
+
+        返回被接管的任务（供调用方记日志），没有可接管的返回 None。
+        """
+        key = (url or "").strip()
+        if not key:
+            return None
+        donor: DownloadTask | None = None
+        with self._lock:
+            for t in self._tasks.values():
+                if (getattr(t, "kind", "video") or "video") != kind:
+                    continue
+                if (t.url or "").strip() != key:
+                    continue
+                if (t.owner_id or "") != (owner_id or ""):
+                    continue
+                # 清晰度必须一致：换了档位分片就不是同一个文件（网盘 .part 更是按体积
+                # 预分配的），接错了比从头下更糟。
+                if (t.quality_key or "") != (quality_key or ""):
+                    continue
+                if t.status not in ("failed", "canceled", "paused"):
+                    continue
+                if not _has_partial_file(t.workdir):
+                    continue
+                if donor is None or t.created_at > donor.created_at:
+                    donor = t
+        if donor is None:
+            return None
+        moved = 0
+        try:
+            for src in list(donor.workdir.iterdir()):
+                if not src.is_file() or not _is_partial_name(src.name):
+                    continue
+                try:
+                    shutil.move(str(src), str(workdir / src.name))
+                    moved += 1
+                except (OSError, shutil.Error):
+                    continue
+        except OSError:
+            return None
+        if moved <= 0:
+            return None
+        donor.resumable = False
+        donor.add_step("断点", "done", "已转交给重新发起的新任务")
+        try:
+            empty = not any(donor.workdir.iterdir())
+        except OSError:
+            empty = False
+        if empty:
+            self.remove(donor.id)
+        return donor
+
     def create(self, *, url: str, title: str, platform: str, quality: str,
                 quality_key: str = "best", extract_mode: str = "",
                 concurrent_fragments: int = 0, downloader_type: str = "",
@@ -386,6 +465,9 @@ class TaskStore:
         task_id = uuid.uuid4().hex[:TASK_ID_LENGTH]
         workdir = self._root / task_id
         workdir.mkdir(parents=True, exist_ok=True)
+        _donor = self._adopt_resume_partials(url=url, workdir=workdir,
+                                             kind=(kind or "video"), owner_id=owner_id,
+                                             quality_key=quality_key)
         task = DownloadTask(
             id=task_id, url=url, title=title, platform=platform, quality=quality,
             quality_key=quality_key, workdir=workdir, extract_mode=extract_mode,
@@ -395,6 +477,10 @@ class TaskStore:
             referer=referer, owner_id=owner_id, kind=kind or "video",
             name_hint=name_hint,
         )
+        if _donor is not None:
+            # 分片已搬进本任务目录 → 执行器按 resume=True 起来（调用方用 _has_partial 判断）
+            task.resumable = True
+            task.add_step("断点", "done", "接上上次未完成的分片，继续下载")
         with self._lock:
             self._tasks[task_id] = task
             self._persist_locked(force=True)
@@ -485,7 +571,9 @@ class TaskStore:
           · completed → 降级为历史条目（清文件、留元数据）；
           · failed / canceled → 连记录一起清掉（它们是真正的终态残留）。
         """
-        deadline = time.time() - ttl
+        now = time.time()
+        deadline = now - ttl
+        resume_deadline = now - RESUME_TTL_SECONDS
         demoted = 0
         with self._lock:
             stale = []
@@ -494,7 +582,12 @@ class TaskStore:
                     continue                     # 已是历史条目
                 if t.status not in _TERMINAL_STATUSES:
                     continue                     # 进行中：绝不清理（P2-18 核心）
-                if t.created_at >= deadline:
+                # 断点优先（2026-10-30）：失败且磁盘上确有分片 → 按 7 天保留，
+                # 否则 1 小时就把「重贴链接接着下」的机会清掉了。completed 不受影响。
+                keep_until = deadline
+                if t.status == "failed" and _has_partial_file(t.workdir):
+                    keep_until = resume_deadline
+                if t.created_at >= keep_until:
                     continue                     # 终态但未到期
                 if t.status == "completed":
                     stale.append((tid, "demote"))
