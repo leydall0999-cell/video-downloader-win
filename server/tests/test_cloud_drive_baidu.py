@@ -83,7 +83,7 @@ class _FakeSession:
     def __init__(self, records=None, page=PAGE_LITERAL,
                  list_errno=0, verify_errno=0, dl_errno=0, dl_list=None,
                  fm_info=None, fm_errno=0, dir_map=None,
-                 own_fm_info=None, own_search=None, own_dir=None):
+                 own_fm_info=None, own_dir=None):
         self.headers = {}
         self.cookies = {}
         self.calls: list[tuple] = []
@@ -102,7 +102,6 @@ class _FakeSession:
         # 🔴 个人网盘（2026-10-28）：filemetas 用 target=（路径）而不是 fsids=，
         #    必须按这一点区分，否则分享侧的 filemetas 会串到个人网盘用例里。
         self._own_fm_info = own_fm_info
-        self._own_search = own_search
         self._own_dir = own_dir
 
     def get(self, url, **kw):
@@ -149,7 +148,10 @@ class _FakeSession:
                 return _Resp({"errno": self._fm_errno})
             return _Resp({"errno": 0, "info": self._fm_info or []})
         if "/api/search" in url:
-            return _Resp({"errno": 0, "list": self._own_search or []})
+            # 2026-10-30 实测：该接口对云端多个账号一律回 errno=2（换 bdstoken /
+            # 去 recursion / 用完整文件名当 wd 都试过），所以替身也照实回 2 ——
+            # 谁再想退回「search 找同名文件」这条老路，测试会立刻红。
+            return _Resp({"errno": 2, "list": []})
         if "/api/list" in url:
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
             dpath = (qs.get("dir") or ["/"])[0]
@@ -546,8 +548,11 @@ def test_share_reuses_own_netdisk_when_ciphertext(caplog):
     p, _ = _patch_session(
         dl_list="ENCRYPTED_BASE64_BLOB==",          # 分享侧：密文
         fm_info=[],                                  # 分享侧 filemetas 也不给
-        own_search=[{"server_filename": name, "size": "9610033",
-                     "isdir": 0, "path": own_path}],
+        # 2026-10-30：发现「找自己网盘里的同名文件」不能用 /api/search（实测该接口
+        # 对部分账号一律 errno=2，等于永不命中），已改为 /api/list 递归建索引，
+        # 所以这里改成按目录回放。
+        own_dir={"/": [{"server_filename": name, "size": "9610033",
+                        "isdir": 0, "path": own_path}]},
         own_fm_info=[{"path": own_path, "size": "9610033", "dlink": DLINK}],
     )
     with caplog.at_level(logging.INFO, logger="cloud_drives.baidu"):
@@ -558,14 +563,39 @@ def test_share_reuses_own_netdisk_when_ciphertext(caplog):
     assert "自己网盘已有同名文件" in caplog.text
 
 
+def test_share_reuse_finds_file_in_subdirectory():
+    """文件在子目录深处也要能复用。
+
+    2026-10-30：旧的 search 方案在云端账号上一律 errno=2，等于永不命中；改走
+    /api/list 递归后必须能翻到子目录里 —— 这条守的就是「别只扫根目录」。
+    """
+    name = RECORDS[0]["server_filename"]
+    own_path = f"/深层/目录/{name}"
+    p, _ = _patch_session(
+        dl_list="ENCRYPTED_BASE64_BLOB==",
+        fm_info=[],
+        own_dir={
+            "/": [{"server_filename": "深层", "isdir": 1, "path": "/深层"}],
+            "/深层": [{"server_filename": "目录", "isdir": 1, "path": "/深层/目录"}],
+            "/深层/目录": [{"server_filename": name, "size": "9610033",
+                            "isdir": 0, "path": own_path}],
+        },
+        own_fm_info=[{"path": own_path, "size": "9610033", "dlink": DLINK}],
+    )
+    with p:
+        files = baidu.resolve_share(SHARE_URL, login_cookie="BDUSS=a", pwd=PWD)
+    assert files and files[0].dlink == DLINK
+    assert files[0].need_login is False
+
+
 def test_share_reuse_requires_matching_size():
     """同名但大小不同 ⇒ 不是同一个文件，不许复用（防止下错片）。"""
     name = RECORDS[0]["server_filename"]
     p, _ = _patch_session(
         dl_list="ENCRYPTED_BASE64_BLOB==",
         fm_info=[],
-        own_search=[{"server_filename": name, "size": "42",     # 大小对不上
-                     "isdir": 0, "path": f"/别处/{name}"}],
+        own_dir={"/": [{"server_filename": name, "size": "42",     # 大小对不上
+                        "isdir": 0, "path": f"/别处/{name}"}]},
         own_fm_info=[{"path": f"/别处/{name}", "size": "42", "dlink": DLINK}],
     )
     with p:

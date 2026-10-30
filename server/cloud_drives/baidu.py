@@ -781,36 +781,132 @@ def resolve_personal(path: str, cookie: str = "",
     raise ValueError(USER_ERROR_TEXT)
 
 
-def _find_own_path(s: requests.Session, name: str, size: int, q: str) -> str:
-    """在自己网盘里按文件名（+ 大小）找一条路径；找不到返回 ""。
+_OWN_INDEX_MAX_FILES = 5000     # 建索引最多扫多少个条目（实测 2 万条要 137s，太慢）
+_OWN_INDEX_MAX_DEPTH = 6        # 目录最多翻 6 层
+_OWN_INDEX_PAGE = 1000          # /api/list 单页条数
+_OWN_INDEX_DEADLINE = 25.0      # 建索引总耗时上限（秒），超了就用已扫到的部分
+_REUSE_MAX_ACCOUNTS = 3         # 复用探测最多试几个账号（每个都要扫一遍网盘）
 
-    只读，不写盘。用于「分享里这份文件其实我网盘里已经有了」的场景 —— 直接复用
-    自己的文件取明文直链，既不用转存，也不占额度。
+
+def _own_scan_dir(s: requests.Session, dirpath: str, q: str,
+                  budget: int, seen: int, idx: dict, pending: set = None) -> tuple:
+    """扫描单个目录（自翻页），文件写进 idx；返回 (已扫条目数, 子目录列表)。
+
+    必须自己 `start += len(items)` 翻页：/api/list 默认只回 100 条，目录里文件
+    超过一页就会漏 —— `_personal_walk` 是不翻页的，超过 100 个文件的目录只看得到
+    前 100 个。
+
+    `order=time&desc=1`：用户「网盘里已有的文件」绝大多数是刚转存/刚保存的，
+    按时间倒序能把要命中的那几个排在最前面。
+
+    `pending` 是还在找的文件名集合，命中一个就移出去 —— 全空时调用方提前收工，
+    不用把整个网盘扫完。
     """
-    if not name:
-        return ""
-    try:
-        j = _json(s.get(f"{_BASE}/api/search", params={
-            "dir": "/", "recursion": "1", "wd": name, "web": "1",
-            "clienttype": "0", "app_id": "250528",
-        }, timeout=_TIMEOUT))
-    except Exception:  # noqa: BLE001
-        return ""
-    if j.get("errno") not in (0, None):
-        logger.info("[baidu] 自己网盘搜索 errno=%s", j.get("errno"))
-        return ""
-    for it in j.get("list") or []:
-        if not isinstance(it, dict) or int(it.get("isdir") or 0):
-            continue
-        if (it.get("server_filename") or "") != name:
-            continue
+    dirs: list = []
+    start = 0
+    while seen < budget:
         try:
-            fsize = int(it.get("size") or 0)
-        except (TypeError, ValueError):
-            fsize = 0
-        if size and fsize and fsize != size:
-            continue          # 同名不同大小 = 不是同一个文件
-        return it.get("path") or ""
+            j = _json(s.get(f"{_BASE}/api/list", params={
+                "dir": dirpath or "/", "order": "time", "desc": "1",
+                "start": str(start), "limit": str(_OWN_INDEX_PAGE), "web": "1",
+                "clienttype": "0", "app_id": "250528",
+            }, timeout=_TIMEOUT))
+        except Exception as e:  # noqa: BLE001
+            logger.info("[baidu] 自己网盘列目录异常 %s：%r", (dirpath or "/")[:80], e)
+            return seen, dirs
+        errno = j.get("errno")
+        if errno not in (0, None):
+            logger.info("[baidu] 自己网盘列目录 errno=%s → %s（%s）", errno,
+                        _errno_msg(errno, "读取个人网盘目录失败"), (dirpath or "/")[:80])
+            return seen, dirs
+        items = [it for it in (j.get("list") or []) if isinstance(it, dict)]
+        if not items:
+            return seen, dirs
+        for it in items:
+            seen += 1
+            if seen > budget:
+                break
+            p = it.get("path") or ""
+            if not p:
+                continue
+            if int(it.get("isdir") or 0):
+                dirs.append(p)
+                continue
+            name = it.get("server_filename") or ""
+            if not name:
+                continue
+            try:
+                size = int(it.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            idx["exact"][(name, size)] = p
+            idx["byname"].setdefault(name, []).append((size, p))
+            if pending is not None:
+                pending.discard(name)
+        start += len(items)
+        if len(items) < _OWN_INDEX_PAGE:
+            return seen, dirs
+    return seen, dirs
+
+
+def _own_file_index(s: requests.Session, q: str, want: Optional[set] = None,
+                    budget: int = 0, deadline: float = 0.0) -> dict:
+    """自己网盘索引 → {"exact": {(名,大小): path}, "byname": {名: [(大小,path)]}}。
+
+    🔴 2026-10-30 实测：**不要用 /api/search**。5 种参数变体（含补 bdstoken、去掉
+       recursion、用完整文件名当 wd）在该账号上一律回 `errno=2`，一条都命中不了 ——
+       旧实现（search + recursion）等于永不命中，日志永远落到最后一句「自己网盘里
+       也没有同名文件」，用户看到的就是「我网盘里明明有这片子，它说没有」。
+       改走 /api/list 逐层翻页自建索引，这是唯一能用的路。
+
+    want: 要找的文件名集合。传了就在扫描过程中边扫边对，**全命中立刻收工** ——
+          常见场景（文件刚保存、在根目录）只需一两次请求。
+    deadline: 总耗时上限，超时返回已扫到的部分（如实记日志，不假装扫全了）。
+    """
+    budget = budget or _OWN_INDEX_MAX_FILES
+    deadline = deadline or _OWN_INDEX_DEADLINE
+    idx: dict = {"exact": {}, "byname": {}}
+    pending = set(n for n in (want or ()) if n) or None
+    seen = 0
+    level = [""]                      # 本轮待扫目录（广度优先）
+    depth = 0
+    t0 = time.time()
+    done_reason = "扫完"
+    while level and seen < budget and depth <= _OWN_INDEX_MAX_DEPTH:
+        if pending is not None and not pending:
+            done_reason = "全命中"
+            break
+        if time.time() - t0 > deadline:
+            done_reason = "超时"
+            break
+        nxt: list = []
+        for d in level:
+            if seen >= budget or time.time() - t0 > deadline:
+                break
+            seen, dirs = _own_scan_dir(s, d, q, budget, seen, idx, pending)
+            nxt.extend(dirs)
+        level = nxt
+        depth += 1
+    logger.info("[baidu] 自己网盘索引：%s（扫 %d 项 / 文件 %d 个 / %.1fs%s）",
+                done_reason, seen, len(idx["exact"]), time.time() - t0,
+                "，仍在找 %d 个" % len(pending) if pending else "")
+    return idx
+
+
+def _find_own_path(index: dict, name: str, size: int) -> str:
+    """在已建好的自己网盘索引里按文件名（+ 大小）找一条路径；找不到返回 ""。
+
+    大小未知（分享页没给 size）时退化为按名匹配；同名多个则取第一个。
+    """
+    if not name or not isinstance(index, dict):
+        return ""
+    if size:
+        hit = (index.get("exact") or {}).get((name, size))
+        if hit:
+            return hit
+    for fsize, p in (index.get("byname") or {}).get(name) or []:
+        if not size or not fsize or fsize == size:
+            return p
     return ""
 
 
@@ -819,23 +915,42 @@ def _reuse_from_own_netdisk(files: list, cands: list, q: str) -> tuple:
 
     返回 ({fs_id: dlink}, 使用的 cookie)。全程只读：不转存、不写盘、不占额度。
     """
-    for ck in cands:
+    # 先把「要找什么」摊平，索引才能边扫边对、命中即收工
+    want: set = set()
+    rows: list = []
+    for rec, _rel in files:
+        fid = str(rec.get("fs_id") or "")
+        if not fid:
+            continue
+        name = rec.get("server_filename") or rec.get("filename") or ""
+        try:
+            size = int(rec.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        if name:
+            want.add(name)
+        rows.append((fid, name, size))
+    if not rows:
+        return {}, ""
+
+    for ck in cands[:_REUSE_MAX_ACCOUNTS]:
         s = new_session(f"{_BASE}/disk/home")
         _apply_login_cookie(s, ck)
+        index = _own_file_index(s, q, want=want)
+        if not index["exact"]:
+            continue                  # 这个号个人网盘读不出文件，换下一个
+        hits: dict = {}               # fs_id -> 自己网盘里的路径
+        for fid, name, size in rows:
+            own = _find_own_path(index, name, size)
+            if own:
+                hits[fid] = own
+        if not hits:
+            continue
+        # 批量取直链：/api/filemetas 支持一次 50 条，别一个文件发一次请求
+        metas = _personal_metas(s, list(set(hits.values())), q)
         out: dict = {}
-        for rec, _rel in files:
-            fid = str(rec.get("fs_id") or "")
-            if not fid:
-                continue
-            name = rec.get("server_filename") or rec.get("filename") or ""
-            try:
-                size = int(rec.get("size") or 0)
-            except (TypeError, ValueError):
-                size = 0
-            own = _find_own_path(s, name, size, q)
-            if not own:
-                continue
-            m = _personal_metas(s, [own], q).get(own)
+        for fid, own in hits.items():
+            m = metas.get(own)
             if m and m[0]:
                 out[fid] = m[0]
                 logger.info("[baidu] 自己网盘已有同名文件，直接复用明文直链：%s", own[:100])
