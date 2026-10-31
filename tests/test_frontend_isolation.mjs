@@ -60,13 +60,16 @@ assert.ok(
 );
 
 // ===== 2. app.js 暴露 window.VDL 共享 helper =====
-const exposureBlock = (appJs.split('window.VDL = Object.assign')[1] || '').split('})();')[0];
+// 注：app.js 里 Windows.VDL 是**多次** Object.assign 追加（管理面板等先追加过几处），
+// 取最后一处才是「共享 helper」那段；旧的 split[1] 早已指向管理面板的增量块（断言误报）。
+const _vdlParts = appJs.split('window.VDL = Object.assign');
+const exposureBlock = (_vdlParts[_vdlParts.length - 1] || '').split('})();')[0];
 assert.ok(exposureBlock.length > 0, 'app.js 应把共享 helper 暴露到 window.VDL');
 for (const key of ['el', 'request', 'showError', 'switchView', 'createTaskCard']) {
   assert.ok(new RegExp('\\b' + key + '\\b').test(exposureBlock), `window.VDL 应暴露 ${key}`);
 }
 
-// ===== 3a. 桌面模式(pywebview.api 立即就绪)：按钮应显示并绑定 =====
+// ===== 3a. 桌面模式(pywebview.api 立即就绪)：退出按钮应显示并绑定 =====
 {
   const els = { quitAppBtn: mkEl(), hideToDesktopBtn: mkEl() };
   const win = {
@@ -77,9 +80,10 @@ for (const key of ['el', 'request', 'showError', 'switchView', 'createTaskCard']
   const doc = mkDoc();
   runDesktop(win, doc);
   assert.equal(els.quitAppBtn.hidden, false, '桌面模式：退出按钮应显示');
-  assert.equal(els.hideToDesktopBtn.hidden, false, '桌面模式：返回桌面按钮应显示');
   assert.ok(els.quitAppBtn._h.click, '桌面模式：退出按钮应绑定 click');
-  assert.ok(els.hideToDesktopBtn._h.click, '桌面模式：返回桌面按钮应绑定 click');
+  // 2026-10-31：「返回桌面」按钮已下线（最小化交给系统标题栏），前端不得再唤醒它
+  assert.equal(els.hideToDesktopBtn.hidden, true, '桌面模式：返回桌面按钮不应再显示');
+  assert.ok(!els.hideToDesktopBtn._h.click, '桌面模式：返回桌面按钮不应再绑定 click');
 }
 
 // ===== 3b. web 模式(无 pywebview)：按钮保持隐藏，仅注册 pywebviewready 监听 =====
@@ -96,7 +100,7 @@ for (const key of ['el', 'request', 'showError', 'switchView', 'createTaskCard']
   win.pywebview = { api: { quit_app() {}, hide_to_desktop() {} } };
   readyFns.forEach((fn) => fn());
   assert.equal(els.quitAppBtn.hidden, false, 'pywebview 就绪后：退出按钮应显示');
-  assert.equal(els.hideToDesktopBtn.hidden, false, 'pywebview 就绪后：返回桌面按钮应显示');
+  assert.equal(els.hideToDesktopBtn.hidden, true, 'pywebview 就绪后：返回桌面按钮仍保持隐藏');
 }
 
 // ===== 3c. window.VDL 缺失：应安全早退，不抛错、不触碰按钮 =====

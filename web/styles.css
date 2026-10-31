@@ -608,7 +608,7 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
    （用户原话：「一堆文件夹我上哪找去」）——带路径的提示行折叠时也照常显示。 */
 .task.is-collapsed .save-hint.save-hint--path { display: block; }
 /* 完成卡的「文件在哪」提示（2026-10-12 用户报「你得让我知道在哪里啊」）：
-   路径等宽可选中，「在访达中显示」是一眼能认出的链接 */
+   路径等宽可选中，「在访达/资源管理器中显示」是一眼能认出的链接 */
 .save-hint .saved-path {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px; word-break: break-all; opacity: .92;

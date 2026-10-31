@@ -167,7 +167,6 @@
     watchClose: $('watchClose'),
     watchBack: $('watchBack'),
     quitAppBtn: $('quitAppBtn'),
-    hideToDesktopBtn: $('hideToDesktopBtn'),
     tasksPanel: $('tasksPanel'),
     taskList: $('taskList'),
     badge: $('engineBadge'),
@@ -2114,9 +2113,10 @@
     return refs;
   };
 
-  /** 把「文件在本机哪儿」渲染到提示行：路径 + 「在访达中显示」直达。
+  /** 把「文件在本机哪儿」渲染到提示行：路径 + 「在访达/资源管理器中显示」直达。
    *  用户原话：「你得让我知道在哪里啊，一堆文件夹我上哪找去」——
-   *  光说「已保存」不够，必须给出路径本身，并且一键能定位到文件。 */
+   *  光说「已保存」不够，必须给出路径本身，并且一键能定位到文件。
+   *  措辞按平台走：Windows 是资源管理器，只有 mac 才叫访达（2026-10-31）。 */
   function renderPathHint(box, prefix, path) {
     // 完成卡是折叠态、`.save-hint` 在折叠态默认 display:none —— 而这一行
     // 正是用户要的「文件在哪」，必须加修饰类让它折叠时也可见（见 styles.css）。
@@ -2132,7 +2132,7 @@
     const link = document.createElement('a');
     link.href = '#';
     link.className = 'saved-reveal';
-    link.textContent = '在访达中显示';
+    link.textContent = revealLabelText();
     link.addEventListener('click', (e) => {
       e.preventDefault();
       const api = window.pywebview && window.pywebview.api;
@@ -8423,7 +8423,7 @@
       e.preventDefault();
       el.idphotoView.classList.remove('is-dragover');
       const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (!f) { idpSetStatus('没识别到图片文件，请从访达把图片拖进来', true); return; }
+      if (!f) { idpSetStatus('没识别到图片文件，请把图片文件拖进来', true); return; }
       if (f.type && !/^image\//.test(f.type)) {
         idpSetStatus('这个文件不是图片，请拖 png / jpg / webp 图片', true);
         return;
@@ -10721,6 +10721,27 @@ el.dwVidPlayer.hidden = true;
     return !!(window.pywebview && window.pywebview.api);
   }
 
+  /** 当前运行平台：'windows' | 'macos' | 'linux' | ''（未知）。
+   *  用途：同一句话在不同平台要用各自的叫法（访达 / 资源管理器 / 文件管理器），
+   *  否则会出现「Windows 上写着在访达中显示」这种一眼假的文案。
+   *  刻意直接读 UA 而不先判断 isDesktopShell：pywebview 的 api 注入晚于首帧，
+   *  若等 api 就绪，mac 首屏那批卡片会退化成中性文案。 */
+  function shellPlatform() {
+    const ua = (navigator && navigator.userAgent) || '';
+    if (/Windows/i.test(ua)) return 'windows';
+    if (/Macintosh|Mac OS X/i.test(ua)) return 'macos';
+    if (/Linux|X11/i.test(ua)) return 'linux';
+    return '';
+  }
+
+  /** 「在文件管理器里定位这个文件」的按钮/链接文案，按平台给正确叫法。 */
+  function revealLabelText() {
+    const p = shellPlatform();
+    if (p === 'windows') return '在资源管理器中显示';
+    if (p === 'macos') return '在访达中显示';
+    return '在文件夹中打开';
+  }
+
   const directNeedsReferer = (video) => !!(video && video.direct_needs_referer);
 
   const directHeaderOf = (video, name) => {
@@ -10780,7 +10801,7 @@ el.dwVidPlayer.hidden = true;
         el.directHint.textContent = '已取消保存（未下载任何文件）。';
         return;
       }
-      el.directHint.textContent = `✅ 已保存到本机：${saved}（右键可用它打开 / 在访达中显示）`;
+      el.directHint.textContent = `✅ 已保存到本机：${saved}（右键可用它打开 / ${revealLabelText()}）`;
     } catch (err) {
       const msg = (err && err.message) || '本机直存失败';
       el.directHint.hidden = false;

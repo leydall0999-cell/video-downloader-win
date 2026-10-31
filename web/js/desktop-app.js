@@ -32,7 +32,11 @@
   };
   const isSelfCopied = (url) => selfCopiedUrls.indexOf(url) >= 0;
 
-  // 显式「退出」/「返回桌面」按钮：仅桌面版(pywebview)显示；浏览器回退模式隐藏（无原生窗口可退）
+  // 显式「退出」按钮：仅桌面版(pywebview)显示；浏览器回退模式隐藏（无原生窗口可退）。
+  // 📌 2026-10-31 删掉右上角「返回桌面」按钮：它只是 window.minimize()，而 Windows/macOS
+  //    窗口标题栏本来就有最小化（Windows 是 —，mac 是黄色圆点），页面里再放一个是重复入口，
+  //    还容易被误点（点完窗口缩到任务栏，用户以为软件退出了）。后端 hide_to_desktop 保留，
+  //    红叉/Cmd+W 的最小化语义不变。
   (function initQuitButton() {
     const wire = () => {
       const api = window.pywebview && window.pywebview.api;
@@ -40,12 +44,6 @@
         el.quitAppBtn.hidden = false;
         el.quitAppBtn.addEventListener('click', () => {
           if (window.confirm('确定退出 VideoDownloader？')) api.quit_app();
-        });
-      }
-      if (api && typeof api.hide_to_desktop === 'function') {
-        el.hideToDesktopBtn.hidden = false;
-        el.hideToDesktopBtn.addEventListener('click', () => {
-          api.hide_to_desktop();
         });
       }
     };
