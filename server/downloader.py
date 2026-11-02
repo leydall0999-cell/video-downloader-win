@@ -8137,9 +8137,16 @@ def _run_once(task: DownloadTask, store: TaskStore, quality_key: str, cookie: st
         with _YoutubeDL(_extract_opts) as ydl:
             # 阶段 1：只解析元数据，不下载
             if _is_douyin_host(_task_host):
-                # 抖音：yt-dlp 提取器已失效，直接用 VPS 解析出的真实音视频轨 URL
-                # 传用户登录态：匿名解析会被 Argus 风控拦截（2026-10-27 实测）
-                info = _douyin_info(task.url, cookie=cookie)
+                # 抖音：yt-dlp 提取器已失效，用真实音视频轨 URL。
+                # 🔴 必须与 probe() 分出同一套路径（2026-11-03 实测漏点）：
+                #    下载阶段原本无条件 `_douyin_info`（VPS worker），桌面端解析明明
+                #    走本地 CDP 成功，一到下载又回远程解析 → 撞 Argus Layer2 →
+                #    报「视频解析服务未配置」/被风控，表现为「能解析但下不了」。
+                if os.environ.get("VDL_INSTANCE") != "cloud":
+                    info = _douyin_info_local(task.url)
+                else:
+                    # 传用户登录态：匿名解析会被 Argus 风控拦截（2026-10-27 实测）
+                    info = _douyin_info(task.url, cookie=cookie)
             elif "ixigua.com" in (_task_host or ""):
                 # 西瓜：原生 IxiguaIE + 浏览器 Cookie（与 probe 同一路径）
                 info = _ixigua_info(task.url, cookie=cookie, proxy=effective_proxy)
