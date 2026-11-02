@@ -1689,27 +1689,18 @@
     return null;
   };
 
-  /** 桌面端抖音扫码登录：打开系统 Chrome 登录页 → 轮询登录态 → 提示重试。
-   *  抖音已升级 Argus 设备指纹风控，必须用真实 Chrome + 登录态才能解析，
-   *  服务器侧无解（详见 douyin_cdp.py 注释）。 */
+  /** 桌面端抖音扫码登录（**可选**入口，只在解析失败时出现）：
+   *  🔴 2026-11-03 实测：游客态（零登录）就能解析绝大多数公开视频，本入口仅用于
+   *  私密 / 关注可见 / 付费视频。因为抖音会给游客也下发 sid_tt/sessionid，
+   *  「已登录」无法用 cookie 可靠判定 ⇒ 不做轮询、不做成功提示，扫完直接回来点解析即可。 */
   const douyinLoginAndPoll = async () => {
     if (!isDesktopShell()) {
-      showToast('网页版不支持抖音扫码登录，请使用桌面端 App', 4000, 'err');
+      showToast('网页版不支持抖音登录，请使用桌面端 App', 4000, 'err');
       return;
     }
     try {
       await request('/api/douyin/login', { method: 'POST', body: '{}', timeout: 30000 }, '');
-      showToast('已在系统 Chrome 打开抖音登录页，请用手机抖音 App 扫码登录', 6000);
-      let ok = false;
-      for (let i = 0; i < 24; i++) {
-        await new Promise((r) => setTimeout(r, 5000));
-        try {
-          const st = await request('/api/douyin/login-status', { method: 'GET' }, '');
-          if (st && st.logged_in) { ok = true; break; }
-        } catch (_) { /* 单次失败忽略 */ }
-      }
-      if (ok) showToast('抖音已登录 ✅ 现在粘贴抖音链接即可解析下载', 5000);
-      else showToast('尚未检测到登录态，请完成手机扫码登录后重试（登录页仍开着）', 5000, 'err');
+      showToast('已打开抖音登录页：扫码完成后回到本窗口，直接点解析即可', 8000);
     } catch (e) {
       showToast('打开抖音登录页失败：' + ((e && e.message) || '未知错误'), 5000, 'err');
     }
@@ -16824,25 +16815,12 @@ el.dwVidPlayer.hidden = true;
   const toggleClearButton = () => { el.clearBtn.hidden = el.input.value.length === 0; };
 
   el.form.addEventListener('submit', handleResolve);
-  // 抖音扫码登录入口（仅桌面端）：抖音已升级 Argus 设备指纹风控，服务器侧无解，
-  // 必须用系统真实 Chrome + 用户登录态才能解析下载（详见 douyin_cdp.py）。
-  if (el.douyinLoginBtn) {
-    const _isDesk = isDesktopShell();
-    el.douyinLoginBtn.hidden = !_isDesk;
-    if (_isDesk) {
-      el.douyinLoginBtn.addEventListener('click', douyinLoginAndPoll);
-      // 首次挂载顺带同步一次登录态文案（已登录则显示「抖音已登录」）
-      (async () => {
-        try {
-          const st = await request('/api/douyin/login-status', { method: 'GET' }, '');
-          if (st && st.logged_in) {
-            const lbl = el.douyinLoginBtn.querySelector('[data-page-node-id="dyLoginLabel"]');
-            if (lbl) lbl.textContent = '抖音已登录';
-          }
-        } catch (_) { /* 登录态查询失败不影响按钮使用 */ }
-      })();
-    }
-  }
+  // 抖音登录入口：**默认不显示**。
+  // 🔴 2026-11-03 实测：游客态（零登录、空 profile）就能正常解析抖音，绝大多数公开视频
+  // 根本不需要登录；抖音还会给游客自动下发 sid_tt/sessionid/uid_tt（匿名会话），
+  // 所以「按 cookie 判是否已登录」在这条链路上恒为真、只会误导用户。
+  // ⇒ 常驻按钮撤掉，只在解析失败的错误横幅里给「登录抖音试试」（仅私密/关注可见/付费
+  //    视频才需要）。按钮节点保留，供 alertAction 的软入口复用。
   // 下载类型切换（视频 / 图片，2026-10-12 图片下载 P0）
   if (el.modeVideoBtn) el.modeVideoBtn.addEventListener('click', () => setDownloadMode('video'));
   if (el.modeImageBtn) el.modeImageBtn.addEventListener('click', () => setDownloadMode('image'));

@@ -708,23 +708,16 @@ def _is_logged_in_unlocked() -> bool:
 
 
 def login_status() -> bool:
-    """登录页轮询专用：检测到登录成功后自动收起可见的登录窗口。
+    """查询抖音登录态（仅用于可选登录入口/诊断，**不据此做任何自动动作**）。
 
-    扫码必须用有头实例（用户要看到二维码），而解析用无头实例。扫完还留着浏览器
-    窗口会让用户以为"每次解析都开浏览器"，所以这里检测到登录态就把窗口关掉，
-    下一次解析会自动起无头实例。
+    🔴🔴 2026-11-03 实测：抖音给**游客**也下发 `sid_tt / sessionid / uid_tt / sid_guard`，
+    也就是说「按 cookie 名判登录」在游客态恒为真。所以：
+      · 绝不能因为这个 true 就去 close_chrome（曾导致用户点「登录抖音」后窗口被自己关掉、
+        根本来不及扫码）；
+      · 界面也不要据此显示「已登录」。
+    解析本身不依赖登录（游客态可用），这里只保留一个尽力而为的查询能力。
     """
-    ok = is_logged_in()
-    if ok and _instance_is_headless() is False:
-        try:
-            _save_cookie_snapshot()   # 会话级 Cookie，关窗前必须落盘
-        except Exception:
-            pass
-        try:
-            close_chrome()
-        except Exception:
-            pass
-    return ok
+    return is_logged_in()
 
 
 def open_login_page() -> dict:

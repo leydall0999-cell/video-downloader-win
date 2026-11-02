@@ -265,7 +265,8 @@ async def douyin_login_status(request: app.Request) -> dict:
         return {'logged_in': False, 'cloud': True}
     try:
         import douyin_cdp
-        # login_status（而非 is_logged_in）：登录成功后顺手收起可见的登录窗口
+        # ⚠️ 只能作为诊断信息：抖音给游客也下发 sessionid 类 cookie，此值在游客态
+        # 恒为 true，绝不能让前端据此显示「已登录」或触发关闭登录窗口的动作。
         return {'logged_in': bool(douyin_cdp.login_status())}
     except Exception:  # noqa: BLE001
         return {'logged_in': False}
