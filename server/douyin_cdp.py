@@ -65,7 +65,10 @@ CHROME = os.environ.get("VDL_CHROME_BIN") or _default_chrome()
 DOUYIN_HOME = "https://www.douyin.com/"
 
 # 登录态判定用的 Cookie 名（命中任一即视为已登录）
-_LOGIN_COOKIES = ("sid_tt", "sessionid_ss", "sid_guard", "odin_tt")
+# 🔴 不要把 odin_tt 放进来（2026-11-03 实测误判）：odin_tt / ttwid / UIFID / passport_csrf_token
+# 都是**设备级** Cookie，未登录也存在 —— 放进判定会出现「显示已登录，一解析就要登录」的假阳性。
+# 只有下面这些是扫码登录成功后才下发的会话 Cookie。
+_LOGIN_COOKIES = ("sid_tt", "sessionid", "sessionid_ss", "sid_guard", "uid_tt")
 
 _LOCK = threading.RLock()   # 可重入：resolve() 内部会再调 is_logged_in()
 _PROC = {"proc": None}
@@ -161,8 +164,15 @@ class _WSClient:
 # ---------------------------------------------------------------------------
 # HTTP 辅助
 # ---------------------------------------------------------------------------
+# 🔴 本地 CDP 端点必须绕开系统/环境代理：App 若在带 HTTP_PROXY 的环境里被拉起
+# （终端、启动器、CI 都可能），urllib 默认会把 http://127.0.0.1:9341 也发给代理，
+# 代理再回 502/超时 —— 表现为「Chrome 起不来 / 建 tab 失败 / 登录态读不出来」，
+# 而实际 Chrome 好好的。
+_LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _http_json(url: str, timeout: int = 10):
-    with urllib.request.urlopen(url, timeout=timeout) as r:
+    with _LOCAL_OPENER.open(url, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
@@ -313,6 +323,9 @@ def _restore_cookie_snapshot() -> int:
     except Exception:
         return 0
     if not ck:
+        return 0
+    # 老/坏快照（只有设备 Cookie、没有真正登录 Cookie）不要回灌，否则会一直假阳性已登录
+    if not any(c.get("name") in _LOGIN_COOKIE_SET for c in ck):
         return 0
     ws = None
     try:
