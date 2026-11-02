@@ -265,7 +265,8 @@ async def douyin_login_status(request: app.Request) -> dict:
         return {'logged_in': False, 'cloud': True}
     try:
         import douyin_cdp
-        return {'logged_in': bool(douyin_cdp.is_logged_in())}
+        # login_status（而非 is_logged_in）：登录成功后顺手收起可见的登录窗口
+        return {'logged_in': bool(douyin_cdp.login_status())}
     except Exception:  # noqa: BLE001
         return {'logged_in': False}
 

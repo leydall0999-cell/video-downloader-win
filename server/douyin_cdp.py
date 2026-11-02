@@ -72,6 +72,8 @@ _LOGIN_COOKIES = ("sid_tt", "sessionid", "sessionid_ss", "sid_guard", "uid_tt")
 
 _LOCK = threading.RLock()   # 可重入：resolve() 内部会再调 is_logged_in()
 _PROC = {"proc": None}
+# 附加启动参数（诊断/实验用，例如 ["--headless=new"]；正常运行为空）
+_EXTRA_FLAGS: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +227,22 @@ def _kill_chrome() -> None:
     _PROC["proc"] = None
 
 
-def launch_chrome(open_url: str | None = None) -> subprocess.Popen:
-    """启动或复用系统 Chrome（独立 profile + 独立端口）。返回进程对象。"""
+# 窗口位置：解析时把窗口挪到屏幕外（用户无感），扫码登录时挪回屏幕内。
+# 🔴 2026-11-03 用户实测报「点解析为什么会打开浏览器」——CDP 解析必须真的跑一个 Chrome，
+# 但没必要让用户看见它。窗口位置控制在「新建 Chrome 时」决定，已运行的不动
+# （否则登录页轮询 login-status 会把二维码窗口一起挪走）。
+_HIDDEN_POS = "-3000,60"   # 越界值交给 macOS 钳制（实际会停在露 40px 的位置）
+_VISIBLE_POS = "120,80"
+_WIN_W, _WIN_H = 1100, 820
+
+
+def launch_chrome(open_url: str | None = None, visible: bool = False) -> subprocess.Popen:
+    """启动或复用系统 Chrome（独立 profile + 独立端口）。返回进程对象。
+
+    visible=False（默认）= 后台静默：窗口放到屏幕外，只做解析，不打扰用户。
+    visible=True = 扫码登录：窗口放回屏幕内。
+    仅在需要**新建** Chrome 时生效；已运行实例不改动其窗口（见 _set_window_visible）。
+    """
     if _chrome_running():
         if _page_targets():
             return _PROC["proc"]
@@ -238,8 +254,10 @@ def launch_chrome(open_url: str | None = None) -> subprocess.Popen:
         "--user-data-dir=%s" % PROFILE, "--no-first-run",
         "--no-default-browser-check", "--no-sandbox",
         "--disable-dev-shm-usage", "--disable-gpu",
-        "--window-size=1100,800",
-    ]
+        "--window-size=%d,%d" % (_WIN_W, _WIN_H),
+        # 静默模式先贴屏幕左沿起窗（macOS 会钳制坐标，实际露约 40px 窄边）
+        "--window-position=%s" % (_VISIBLE_POS if visible else _HIDDEN_POS),
+    ] + list(_EXTRA_FLAGS)
     if open_url:
         args.append(open_url)
     else:
@@ -259,6 +277,12 @@ def launch_chrome(open_url: str | None = None) -> subprocess.Popen:
                 _restore_cookie_snapshot()
             except Exception:
                 pass
+            if not visible and "--headless=new" not in _EXTRA_FLAGS:
+                # 有头 + 静默：起来就在屏幕左沿待着，别在用户眼前弹窗
+                try:
+                    _set_window_visible(False)
+                except Exception:
+                    pass
             return proc
         except Exception:
             if proc.poll() is not None:
@@ -269,6 +293,93 @@ def launch_chrome(open_url: str | None = None) -> subprocess.Popen:
 
 def _browser_ws() -> str:
     return _http_json("http://127.0.0.1:%d/json/version" % PORT, timeout=3)["webSocketDebuggerUrl"]
+
+
+def _cdp_browser_call(method: str, params: dict | None = None,
+                      timeout: float = 5.0) -> dict:
+    """Browser 域单次调用（连接浏览器级 WS，收一条同名 id 的响应就返回）。"""
+    ws = None
+    try:
+        ws = _WSClient(_browser_ws())
+        ws.send_text(json.dumps({"id": 1, "method": method, "params": params or {}}))
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                _, raw = ws.recv_msg()
+            except RuntimeError:
+                break
+            try:
+                m = json.loads(raw)
+            except ValueError:
+                continue
+            if m.get("id") == 1:
+                if m.get("error"):
+                    return {}
+                return m.get("result") or {}
+    except Exception:
+        return {}
+    finally:
+        try:
+            if ws is not None:
+                ws.sock.close()
+        except Exception:
+            pass
+    return {}
+
+
+def _set_window_visible(visible: bool) -> bool:
+    """把 Chrome 主窗口挪到屏幕外沿（解析静默）/ 移回屏幕内（扫码可见）。
+
+    🔴 2026-11-03 实测三条硬约束，别随手改：
+      1. 不能"最小化"：窗口 minimized ⇒ 页面 visibilityState=hidden ⇒ 抖音播放器
+         不初始化，整个解析 56s 抓不到任何 douyinvod 流（有端口、无流）。
+      2. 不能 left=-3200 一放了之：macOS 钳制坐标，窗口至少留 ~40px 在屏内
+         （1100 宽时 left 最低 -1060）。
+      3. 窗口尺寸必须保持正常（1100x800）：抖音按视口大小选码率，窗口缩到很小
+         只能拿到低清晰度流。
+    所以静默 = 保持 normal 状态 + 贴屏幕最左沿（只露一条 40px 边，不抢焦点）。
+    """
+    targets = _page_targets()
+    if not targets:
+        return False
+    tid = targets[0].get("id") or ""
+    if not tid:
+        return False
+    res = _cdp_browser_call("Browser.getWindowForTarget", {"targetId": tid})
+    wid = res.get("windowId")
+    if not wid:
+        return False
+    bounds = res.get("bounds") or {}
+    state = (bounds.get("windowState") or "normal").lower()
+    left = bounds.get("left") or 0
+    try:
+        if visible:
+            if not (state == "normal" and left > -1000):
+                if state != "normal":
+                    _cdp_browser_call("Browser.setWindowBounds",
+                                      {"windowId": wid, "bounds": {"windowState": "normal"}})
+                _cdp_browser_call("Browser.setWindowBounds", {
+                    "windowId": wid,
+                    "bounds": {"left": 120, "top": 80, "width": _WIN_W, "height": _WIN_H}})
+            if sys.platform == "darwin":
+                # 必须显式 activate：Chrome 进程在后台时窗口不会获得焦点，
+                # 用户会以为"点了登录没反应"（二维码藏在别的应用后面）
+                subprocess.run(["osascript", "-e",
+                                'tell application "Google Chrome" to activate'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        # ---- 静默：normal + 贴最左沿（坐标越界由系统钳制，别指望真出屏）----
+        if state != "normal":
+            _cdp_browser_call("Browser.setWindowBounds",
+                              {"windowId": wid, "bounds": {"windowState": "normal"}})
+        if state == "normal" and left < -900 and (bounds.get("width") or 0) >= _WIN_W - 8:
+            return True
+        _cdp_browser_call("Browser.setWindowBounds", {
+            "windowId": wid,
+            "bounds": {"left": -3000, "top": 60, "width": _WIN_W, "height": _WIN_H}})
+        return True
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -406,16 +517,65 @@ def _restore_cookie_snapshot() -> int:
     return 0
 
 
-def _create_target(url: str) -> str:
+def _headless_enabled() -> bool:
+    """解析默认走无头 Chrome（零窗口，用户完全无感）。
+
+    🔴 2026-11-03 实测 `--headless=new` + 同一 profile/cookie 快照可以正常抓到
+    douyinvod 流（9.9s），所以没必要让用户看窗口。万一某台机器上被抖音拦，
+    设 VDL_DOUYIN_HEADLESS=0 可退回「有头但贴屏幕左沿」，或由 _ensure_mode 自动回退。
+    """
+    return os.environ.get("VDL_DOUYIN_HEADLESS", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def _instance_is_headless() -> bool | None:
+    """当前 9341 端口上的实例是否无头。无实例返回 None。"""
+    try:
+        v = _http_json("http://127.0.0.1:%d/json/version" % PORT, timeout=2)
+    except Exception:
+        return None
+    ua = v.get("User-Agent") or ""
+    # 页面内 navigator.userAgent 在 headless=new 里与有头一致，
+    # 但浏览器进程的 UA（/json/version）仍带 HeadlessChrome —— 这是唯一可靠信号
+    return "HeadlessChrome" in ua
+
+
+def _ensure_mode(headless: bool) -> None:
+    """确保 Chrome 实例形态正确：解析=headless（无窗口）/ 登录=有头（看得见二维码）。
+
+    形态不符时先落 Cookie 快照再重启（抖音登录 Cookie 是会话级的，关了就没）。
+    """
+    want = ["--headless=new"] if headless else []
+    cur = _instance_is_headless()
+    if cur is not None and cur == headless and _page_targets():
+        _EXTRA_FLAGS[:] = want
+        return
+    if cur is not None:
+        try:
+            _save_cookie_snapshot()
+        except Exception:
+            pass
+        _kill_chrome()
+    _EXTRA_FLAGS[:] = want
+    launch_chrome(visible=not headless)
+
+
+def _create_target(url: str, background: bool = False) -> str:
     """在 Chrome 里新开一个 tab（target），返回 targetId。
 
     当前没有任何页面时用新窗口建（否则建出来的是"无窗口后台 tab"，
-    拿不到可挂接的 webSocket 地址，用户也看不到浏览器在干活）。
+    拿不到可挂接的 webSocket 地址）。
+
+    background=True：后台建 tab 不激活窗口 —— 🔴 实测 Chrome 建前台 tab 会
+    自动把最小化的窗口恢复出来，导致"解析时浏览器弹出来"（用户 2026-11-03 反馈）。
     """
     no_page = not _page_targets()
     bws = _WSClient(_browser_ws())
+    params = {"url": url, "newWindow": no_page}
+    if background and not no_page:
+        params["background"] = True
     bws.send_text(json.dumps({"id": 1, "method": "Target.createTarget",
-                              "params": {"url": url, "newWindow": no_page}}))
+                              "params": params}))
     deadline = time.time() + 10
     while time.time() < deadline:
         try:
@@ -520,10 +680,32 @@ def _is_logged_in_unlocked() -> bool:
     return False
 
 
+def login_status() -> bool:
+    """登录页轮询专用：检测到登录成功后自动收起可见的登录窗口。
+
+    扫码必须用有头实例（用户要看到二维码），而解析用无头实例。扫完还留着浏览器
+    窗口会让用户以为"每次解析都开浏览器"，所以这里检测到登录态就把窗口关掉，
+    下一次解析会自动起无头实例。
+    """
+    ok = is_logged_in()
+    if ok and _instance_is_headless() is False:
+        try:
+            _save_cookie_snapshot()   # 会话级 Cookie，关窗前必须落盘
+        except Exception:
+            pass
+        try:
+            close_chrome()
+        except Exception:
+            pass
+    return ok
+
+
 def open_login_page() -> dict:
     """打开抖音登录页（展示二维码），用户在手机抖音 App 扫码登录。"""
     with _LOCK:
-        launch_chrome()
+        # 解析用的是无头实例（看不见窗口）⇒ 登录必须先切成有头可见实例
+        _ensure_mode(headless=False)
+        _set_window_visible(True)
         # 已经有抖音页就复用，别每次点按钮都叠一个新 tab
         existing = next((t for t in _page_targets()
                          if "douyin.com" in (t.get("url") or "")), None)
@@ -532,6 +714,7 @@ def open_login_page() -> dict:
             _bring_to_front(target_id)
         else:
             target_id = _create_target(DOUYIN_HOME)
+            _bring_to_front(target_id)
         return {
             "ok": True,
             "hint": "已在系统 Chrome 打开抖音登录页，请用手机抖音 App 扫码登录；"
@@ -605,7 +788,27 @@ def _resolve_unlocked(url: str, timeout: int = 90) -> dict:
             "请点击「登录抖音」按钮，用手机抖音扫码登录后重试。",
             category="douyin_login_required")
 
-    launch_chrome()
+    headless = _headless_enabled()
+    try:
+        _ensure_mode(headless=headless)
+        return _capture(url, timeout)
+    except ResolveError as e:
+        # 兜底：无头实例被抖音识别/拦截（极少见）时，退回有头可见实例再抓一次。
+        # 只对「能连上但没抓到流」重试，登录态/没装 Chrome 这类错误重试也没意义。
+        if headless and getattr(e, "category", "") in ("douyin_login_stale", "parse_failed"):
+            print("[douyin_cdp] 无头未抓到流(%s)，回退有头重试" % e.category, flush=True)
+            try:
+                _ensure_mode(headless=False)
+                return _capture(url, timeout)
+            except Exception:
+                raise e from None
+        raise
+
+
+def _capture(url: str, timeout: int = 90) -> dict:
+    """在已就绪的 Chrome 实例里开 tab、导航、抓 douyinvod 流。形态由 _ensure_mode 决定。"""
+    from downloader import ResolveError
+
     target_id = _create_target(url)
     ws_url = None
     for _ in range(30):
