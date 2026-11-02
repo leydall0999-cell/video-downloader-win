@@ -195,6 +195,12 @@ def launch_chrome(open_url: str | None = None) -> subprocess.Popen:
         try:
             _http_json("http://127.0.0.1:%d/json/version" % PORT, timeout=2)
             _PROC["proc"] = proc
+            # 会话级登录 Cookie 已随上次退出被清掉 → 启动后先灌回快照，
+            # 否则用户每次重启 App 都得重新扫码。
+            try:
+                _restore_cookie_snapshot()
+            except Exception:
+                pass
             return proc
         except Exception:
             if proc.poll() is not None:
@@ -205,6 +211,138 @@ def launch_chrome(open_url: str | None = None) -> subprocess.Popen:
 
 def _browser_ws() -> str:
     return _http_json("http://127.0.0.1:%d/json/version" % PORT, timeout=3)["webSocketDebuggerUrl"]
+
+
+# ---------------------------------------------------------------------------
+# Cookie 快照（🔴 2026-11-03 实测坑）
+# 抖音的登录 Cookie（sid_tt / sessionid_ss / sid_guard / odin_tt）是**会话级**的：
+# Chrome 正常退出时会把它们从 Cookies 库里清掉（除非开"继续上次会话"），结果就是
+# 用户扫一次码，App 重启后又变未登录，得反复扫码。profile 里只剩 UIFID/ttwid 这类
+# 设备 Cookie（所以"看起来有抖音 cookie"其实没登录）。
+# 解法：登录态一出现就 CDP 导出快照落盘，下次启动灌回浏览器再导航。
+# ---------------------------------------------------------------------------
+_COOKIE_SNAPSHOT = os.path.join(PROFILE, "douyin_cookies.json")
+_LOGIN_COOKIE_SET = set(_LOGIN_COOKIES)
+_SNAP_SIG = [None]
+
+
+def _douyin_cookies(cookies) -> list[dict]:
+    """从 CDP cookie 列表里挑出抖音域，转成 Storage.setCookies 可回灌的形状。"""
+    out: list[dict] = []
+    for c in cookies or []:
+        dom = (c.get("domain") or "").lower()
+        if "douyin.com" not in dom:
+            continue
+        item = {
+            "name": c.get("name") or "",
+            "value": c.get("value") or "",
+            "domain": c.get("domain") or ".douyin.com",
+            "path": c.get("path") or "/",
+            "secure": bool(c.get("secure")),
+            "httpOnly": bool(c.get("httpOnly")),
+            "sameSite": c.get("sameSite") or "Lax",
+        }
+        exp = c.get("expires")
+        if isinstance(exp, (int, float)) and exp > 0:
+            item["expires"] = exp
+        out.append(item)
+    return out
+
+
+def _browser_cookies() -> list[dict]:
+    """浏览器级取全部 Cookie（含刚登录写入的会话 Cookie）。失败返回空表。"""
+    ws = None
+    try:
+        ws = _WSClient(_browser_ws())
+        ws.send_text(json.dumps({"id": 1, "method": "Storage.getCookies"}))
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            try:
+                _, raw = ws.recv_msg()
+            except RuntimeError:
+                break
+            try:
+                m = json.loads(raw)
+            except ValueError:
+                continue
+            if m.get("id") == 1:
+                return (m.get("result") or {}).get("cookies") or []
+    except Exception:
+        return []
+    finally:
+        try:
+            if ws is not None:
+                ws.sock.close()
+        except Exception:
+            pass
+    return []
+
+
+def _save_cookie_snapshot(cookies=None) -> int:
+    """把当前抖音 Cookie 落盘（0600）。不含登录 Cookie 就不写，避免存一堆无用的设备 Cookie。"""
+    ck = _douyin_cookies(cookies if cookies is not None else _browser_cookies())
+    if not ck or not any(c["name"] in _LOGIN_COOKIE_SET for c in ck):
+        return 0
+    sig = (len(ck), sum(len(c["value"]) for c in ck))
+    if _SNAP_SIG[0] == sig and os.path.exists(_COOKIE_SNAPSHOT):
+        return len(ck)
+    tmp = _COOKIE_SNAPSHOT + ".tmp.%d" % os.getpid()
+    try:
+        os.makedirs(PROFILE, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"saved_at": time.time(), "cookies": ck}, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, _COOKIE_SNAPSHOT)
+        _SNAP_SIG[0] = sig
+        return len(ck)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+        return 0
+
+
+def _restore_cookie_snapshot() -> int:
+    """把上次落盘的 Cookie 灌回浏览器（每个 Chrome 生命周期灌一次）。"""
+    if not os.path.exists(_COOKIE_SNAPSHOT):
+        return 0
+    try:
+        with open(_COOKIE_SNAPSHOT, encoding="utf-8") as f:
+            ck = (json.load(f) or {}).get("cookies") or []
+    except Exception:
+        return 0
+    if not ck:
+        return 0
+    ws = None
+    try:
+        ws = _WSClient(_browser_ws())
+        ws.send_text(json.dumps({"id": 1, "method": "Storage.setCookies",
+                                 "params": {"cookies": ck}}))
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            try:
+                _, raw = ws.recv_msg()
+            except RuntimeError:
+                break
+            try:
+                m = json.loads(raw)
+            except ValueError:
+                continue
+            if m.get("id") == 1:
+                if m.get("error"):
+                    return 0
+                _SNAP_SIG[0] = (len(ck), sum(len(c.get("value") or "") for c in ck))
+                return len(ck)
+    except Exception:
+        return 0
+    finally:
+        try:
+            if ws is not None:
+                ws.sock.close()
+        except Exception:
+            pass
+    return 0
 
 
 def _create_target(url: str) -> str:
@@ -278,6 +416,11 @@ def _is_logged_in_unlocked() -> bool:
                 for c in cookies:
                     dom = (c.get("domain") or "").lower()
                     if "douyin.com" in dom and c.get("name") in _LOGIN_COOKIES:
+                        # 登录态一出现就落快照（会话 Cookie 退出即失，见 _COOKIE_SNAPSHOT 说明）
+                        try:
+                            _save_cookie_snapshot(cookies)
+                        except Exception:
+                            pass
                         return True
                 return False
     except Exception:
@@ -453,6 +596,12 @@ def _resolve_unlocked(url: str, timeout: int = 90) -> dict:
             pass
         _close_target(target_id)
 
+    # 抓流成功后顺手刷新登录 Cookie 快照（登录 Cookie 可能刚被抖音续期）
+    try:
+        _save_cookie_snapshot()
+    except Exception:
+        pass
+
     # 优先混合轨（单直链），其次 视频+音频 分离轨
     if combined:
         return {
@@ -505,6 +654,13 @@ def close_chrome() -> None:
     故优先用 CDP `Browser.close`（同一 profile/端口，任何进程都能关），再退本地句柄。
     """
     proc = _PROC.get("proc")
+    # 0) 关之前先落 Cookie 快照：抖音登录 Cookie 是会话级的，Chrome 一退就被清掉，
+    #    不存快照 = 用户下次还得重新扫码。
+    if _chrome_running():
+        try:
+            _save_cookie_snapshot()
+        except Exception:
+            pass
     # 1) CDP Browser.close：跨进程生效
     if _chrome_running():
         try:
