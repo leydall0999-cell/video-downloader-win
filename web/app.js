@@ -1728,8 +1728,8 @@
     // network / restricted / unknown 等），让同一个横幅对不同错误给出不同引导，
     // 而不是千篇一律的「解析失败」。
     const cat = String(category || '').trim();
-    const ICON = { cookie_required: '🔑', cookie_invalid_or_expired: '🔑', cdn_forbidden: '🚫', restricted: '🔒', network: '🌐', douyin_login_required: '🎵', douyin_no_chrome: '🌐' };
-    const ACCENT = { cookie_required: '#e0a33a', cookie_invalid_or_expired: '#e0a33a', cdn_forbidden: '#e2554f', restricted: '#9aa0a6', network: '#4a90d9', douyin_login_required: '#FE2C55' };
+    const ICON = { cookie_required: '🔑', cookie_invalid_or_expired: '🔑', cdn_forbidden: '🚫', restricted: '🔒', network: '🌐', douyin_login_required: '🎵', douyin_login_stale: '🎵', douyin_no_chrome: '🌐' };
+    const ACCENT = { cookie_required: '#e0a33a', cookie_invalid_or_expired: '#e0a33a', cdn_forbidden: '#e2554f', restricted: '#9aa0a6', network: '#4a90d9', douyin_login_required: '#FE2C55', douyin_login_stale: '#FE2C55' };
     // 先重置上一次的分类样式，避免串台
     el.alert.className = 'alert';
     el.alert.style.borderLeftColor = '';
@@ -1738,8 +1738,8 @@
     // cookie 类错误：给一个「去粘贴 Cookie」按钮，一键展开高级选项并聚焦输入框
     if (el.alertAction) {
       const isCookie = cat === 'cookie_required' || cat === 'cookie_invalid_or_expired';
-      if (cat === 'douyin_login_required') {
-        el.alertAction.textContent = '去登录抖音';
+      if (cat === 'douyin_login_required' || cat === 'douyin_login_stale') {
+        el.alertAction.textContent = cat === 'douyin_login_stale' ? '重新扫码登录' : '去登录抖音';
         el.alertAction.hidden = false;
         el.alertAction.style.cssText = 'margin-top:.5rem;padding:.35rem .7rem;border:none;border-radius:6px;background:#FE2C55;color:#fff;font-size:12px;font-weight:600;cursor:pointer;';
         el.alertAction.onclick = () => { douyinLoginAndPoll(); };
