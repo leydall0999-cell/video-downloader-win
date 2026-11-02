@@ -19,7 +19,7 @@ from typing import Any
 CHANGELOG: list[dict[str, Any]] = [
     {
         "version": "1.1.07",
-        "date": "2026-10-31",
+        "date": "2026-11-03",
         "items": [],
     },
     {

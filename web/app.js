@@ -1739,7 +1739,9 @@
     if (el.alertAction) {
       const isCookie = cat === 'cookie_required' || cat === 'cookie_invalid_or_expired';
       if (cat === 'douyin_login_required' || cat === 'douyin_login_stale') {
-        el.alertAction.textContent = cat === 'douyin_login_stale' ? '重新扫码登录' : '去登录抖音';
+        // 抖音抓不到流时给「登录试试」入口（游客态可解析绝大多数公开视频，
+        // 只有私密/关注可见/付费才需要登录，所以措辞是"试试"而不是"必须先登录"）
+        el.alertAction.textContent = '登录抖音试试';
         el.alertAction.hidden = false;
         el.alertAction.style.cssText = 'margin-top:.5rem;padding:.35rem .7rem;border:none;border-radius:6px;background:#FE2C55;color:#fff;font-size:12px;font-weight:600;cursor:pointer;';
         el.alertAction.onclick = () => { douyinLoginAndPoll(); };

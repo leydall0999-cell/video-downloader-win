@@ -37,24 +37,51 @@ import urllib.parse
 # ---------------------------------------------------------------------------
 # 常量 / 路径
 # ---------------------------------------------------------------------------
-def _default_chrome() -> str:
+def _browser_candidates() -> list[str]:
+    """按优先级列出可用的 Chromium 内核浏览器（都能跑 `--remote-debugging-port`
+    和 `--headless=new`，因此都能当抖音解析引擎）。
+
+    🔴 2026-11-03 用户质问「没装 Chrome 就用不了，那和不能用有什么区别」——这条
+    确实是真缺口，但 Windows 端本来不该有：
+      - Win10/11 **自带 Edge**（Chromium 内核）⇒ 加进候选后 Windows 用户零安装。
+      - macOS 自带 Safari（WKWebView 内核）**不支持 CDP**，所以只能 Chrome/Edge/Brave。
+    """
     if sys.platform == "darwin":
-        return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    if sys.platform == "win32":
-        candidates = [
-            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-            os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
-            os.path.expandvars(r"%PROGRAMFILES(x86)%\Google\Chrome\Application\chrome.exe"),
+        return [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            os.path.expanduser(
+                "~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
         ]
-        for p in candidates:
-            if p and os.path.exists(p):
-                return p
-        return "chrome.exe"
-    # Linux（开发/测试场景）
-    for p in ("/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"):
-        if os.path.exists(p):
+    if sys.platform == "win32":
+        pf = os.path.expandvars(r"%PROGRAMFILES%")
+        pf86 = os.path.expandvars(r"%PROGRAMFILES(X86)%")
+        la = os.path.expandvars(r"%LOCALAPPDATA%")
+        return [
+            os.path.join(la, r"Google\Chrome\Application\chrome.exe"),
+            os.path.join(pf, r"Google\Chrome\Application\chrome.exe"),
+            os.path.join(pf86, r"Google\Chrome\Application\chrome.exe"),
+            # Edge 是 Windows 预装，放在 Chrome 之后作兜底 ⇒ 覆盖率接近 100%
+            os.path.join(pf86, r"Microsoft\Edge\Application\msedge.exe"),
+            os.path.join(pf, r"Microsoft\Edge\Application\msedge.exe"),
+            os.path.join(la, r"BraveSoftware\Brave-Browser\Application\brave.exe"),
+        ]
+    return [
+        "/usr/bin/google-chrome",
+        "/usr/bin/microsoft-edge",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ]
+
+
+def _default_chrome() -> str:
+    cands = _browser_candidates()
+    for p in cands:
+        if p and os.path.exists(p):
             return p
-    return "google-chrome"
+    return cands[0]   # 都没有：返回首选路径，交给调用方报「未找到浏览器」
 
 
 PORT = int(os.environ.get("VDL_DOUYIN_CDP_PORT", "9341"))
@@ -778,16 +805,14 @@ def _resolve_unlocked(url: str, timeout: int = 90) -> dict:
 
     if not os.path.exists(CHROME):
         raise ResolveError(
-            "本地未找到 Chrome 浏览器",
-            "抖音解析依赖系统 Chrome 捕获真实视频流。请安装 Google Chrome 后重试。",
+            "本地未找到 Chrome / Edge 浏览器",
+            "抖音解析需要一个 Chromium 内核浏览器（Chrome 或 Edge）来捕获真实视频流"
+            "（Safari 内核不行）。装好 Chrome 或 Edge 后重新点解析即可。",
             category="douyin_no_chrome")
-    if not is_logged_in():
-        raise ResolveError(
-            "请先登录抖音",
-            "抖音已升级反爬（Argus 设备指纹风控），需在系统 Chrome 里登录抖音账号才能解析。"
-            "请点击「登录抖音」按钮，用手机抖音扫码登录后重试。",
-            category="douyin_login_required")
-
+    # 🔴🔴 2026-11-03 实测推翻旧结论：**游客态（完全不登录、全新空 profile）也能抓到流**，
+    # 同一视频 10.6s 成功、直链与登录态一致（br=1380）。原来的「必须登录」是从服务器侧
+    # 失败经验照搬过来的过度限制，已删除 —— 用户首次使用不该被扫码拦住。
+    # 登录降级为**可选**：只有私密 / 关注可见 / 部分受限视频才需要（见下方错误文案）。
     headless = _headless_enabled()
     try:
         _ensure_mode(headless=headless)
@@ -961,10 +986,13 @@ def _capture(url: str, timeout: int = 90) -> dict:
     # 🔴 已登录却抓不到流：最常见是"会话在服务端已过期"（本地 Cookie 还在，界面显示已登录，
     # 但抖音把我们当未登录给登录墙）。这种情况必须引导重新扫码，否则用户会卡在
     # "永远显示已登录、永远解析失败"的死角里。另可能是私密/已删除/合集/直播页。
+    # 🔴 游客态抓不到流的三种常见原因：① 该视频本身要求登录（私密/关注可见/付费）
+    # ② 链接是已删除 / 合集 / 直播页 ③ 页面加载超时。给出「可选登录」入口即可，
+    # 不要把话说成「必须先登录」——绝大多数公开视频游客就能下。
     raise ResolveError(
         "抖音没抓到视频流",
-        "登录状态可能已过期（本地仍显示已登录，但抖音已不认）。请点「去登录抖音」"
-        "重新扫码后重试；若链接是私密/已删除/合集/直播页，请换单个视频播放页的链接。",
+        "这条视频可能需要登录才能看（私密 / 关注可见 / 付费内容），也可能是已删除、合集"
+        "或直播页。可点「登录抖音」扫码后再试，或换一个单个视频的分享链接。",
         category="douyin_login_stale")
 
 
