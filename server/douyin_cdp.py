@@ -184,10 +184,54 @@ def _chrome_running() -> bool:
         return False
 
 
+def _page_targets() -> list[dict]:
+    """当前 Chrome 里的页面标签（type == 'page'）。空 = 无窗口僵尸。"""
+    try:
+        return [t for t in _http_json("http://127.0.0.1:%d/json/list" % PORT, timeout=3)
+                if t.get("type") == "page"]
+    except Exception:
+        return []
+
+
+def _kill_chrome() -> None:
+    """关掉本 profile 的 Chrome（先走 CDP，再兜底按命令行杀）。
+
+    macOS 上 Chrome 关掉所有窗口后进程会继续驻留（Dock 里那个点），
+    CDP target 变成 0 个，既建不了 tab 也不会自动退出。这种"僵尸"必须先清掉。
+    """
+    try:
+        ws = _WSClient(_browser_ws())
+        ws.send_text(json.dumps({"id": 1, "method": "Browser.close"}))
+        try:
+            ws.sock.close()
+        except Exception:
+            pass
+    except Exception:
+        pass
+    for _ in range(12):
+        if not _chrome_running():
+            break
+        time.sleep(0.5)
+    if _chrome_running():
+        try:
+            subprocess.run(["pkill", "-f", "--user-data-dir=%s" % PROFILE],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+        for _ in range(10):
+            if not _chrome_running():
+                break
+            time.sleep(0.5)
+    _PROC["proc"] = None
+
+
 def launch_chrome(open_url: str | None = None) -> subprocess.Popen:
     """启动或复用系统 Chrome（独立 profile + 独立端口）。返回进程对象。"""
     if _chrome_running():
-        return _PROC["proc"]
+        if _page_targets():
+            return _PROC["proc"]
+        # 有端口没窗口 ⇒ 僵尸，关掉重开（否则建 tab 拿不到 webSocket 地址）
+        _kill_chrome()
     os.makedirs(PROFILE, exist_ok=True)
     args = [
         CHROME, "--remote-debugging-port=%d" % PORT,
@@ -198,6 +242,10 @@ def launch_chrome(open_url: str | None = None) -> subprocess.Popen:
     ]
     if open_url:
         args.append(open_url)
+    else:
+        # 必须带一个初始页面：否则 Chrome 可能走"恢复上次会话"，上次窗口已关时
+        # 就起来一个没有窗口的进程（CDP target=0），建 tab 直接失败。
+        args.append("about:blank")
     proc = subprocess.Popen(
         args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True)
@@ -359,10 +407,15 @@ def _restore_cookie_snapshot() -> int:
 
 
 def _create_target(url: str) -> str:
-    """在 Chrome 里新开一个 tab（target），返回 targetId。"""
+    """在 Chrome 里新开一个 tab（target），返回 targetId。
+
+    当前没有任何页面时用新窗口建（否则建出来的是"无窗口后台 tab"，
+    拿不到可挂接的 webSocket 地址，用户也看不到浏览器在干活）。
+    """
+    no_page = not _page_targets()
     bws = _WSClient(_browser_ws())
     bws.send_text(json.dumps({"id": 1, "method": "Target.createTarget",
-                              "params": {"url": url, "newWindow": False}}))
+                              "params": {"url": url, "newWindow": no_page}}))
     deadline = time.time() + 10
     while time.time() < deadline:
         try:
@@ -407,11 +460,10 @@ def is_logged_in() -> bool:
         return _is_logged_in_unlocked()
 
 
-def _is_logged_in_unlocked() -> bool:
-    """浏览器级 Storage.getCookies（不新建标签页，轮询开销极小）。"""
+def _storage_get_cookies() -> list[dict]:
+    """浏览器级读 Cookie（不新建标签页，轮询开销极小）。"""
     ws = None
     try:
-        launch_chrome()
         ws = _WSClient(_browser_ws())
         ws.send_text(json.dumps({"id": 1, "method": "Storage.getCookies"}))
         deadline = time.time() + 8
@@ -425,39 +477,89 @@ def _is_logged_in_unlocked() -> bool:
             except ValueError:
                 continue
             if m.get("id") == 1:
-                cookies = (m.get("result") or {}).get("cookies") or []
-                for c in cookies:
-                    dom = (c.get("domain") or "").lower()
-                    if "douyin.com" in dom and c.get("name") in _LOGIN_COOKIES:
-                        # 登录态一出现就落快照（会话 Cookie 退出即失，见 _COOKIE_SNAPSHOT 说明）
-                        try:
-                            _save_cookie_snapshot(cookies)
-                        except Exception:
-                            pass
-                        return True
-                return False
+                return (m.get("result") or {}).get("cookies") or []
     except Exception:
-        return False
+        return []
     finally:
         try:
             if ws is not None:
                 ws.sock.close()
         except Exception:
             pass
+    return []
+
+
+def _has_login_cookie(cookies) -> bool:
+    for c in cookies or []:
+        if "douyin.com" in (c.get("domain") or "").lower() and c.get("name") in _LOGIN_COOKIE_SET:
+            return True
+    return False
+
+
+def _is_logged_in_unlocked() -> bool:
+    try:
+        launch_chrome()
+    except Exception:
+        return False
+    cookies = _storage_get_cookies()
+    if _has_login_cookie(cookies):
+        # 登录态一出现就落快照（会话 Cookie 退出即失，见 _COOKIE_SNAPSHOT 说明）
+        try:
+            _save_cookie_snapshot(cookies)
+        except Exception:
+            pass
+        return True
+    # 🔴 Chrome 可能是上一轮 / 别的进程启动的：这种路径没有走"启动后灌回快照"，
+    # 会话级登录 Cookie 就不在浏览器里（表现为快照明明有、界面却说未登录）。
+    # 这里按需补灌一次再判，把"每次用之前都得扫码"彻底断掉。
+    try:
+        if _restore_cookie_snapshot() and _has_login_cookie(_storage_get_cookies()):
+            return True
+    except Exception:
+        pass
     return False
 
 
 def open_login_page() -> dict:
     """打开抖音登录页（展示二维码），用户在手机抖音 App 扫码登录。"""
     with _LOCK:
-        launch_chrome(DOUYIN_HOME)
-        target_id = _create_target(DOUYIN_HOME)
+        launch_chrome()
+        # 已经有抖音页就复用，别每次点按钮都叠一个新 tab
+        existing = next((t for t in _page_targets()
+                         if "douyin.com" in (t.get("url") or "")), None)
+        if existing:
+            target_id = existing.get("id") or ""
+            _bring_to_front(target_id)
+        else:
+            target_id = _create_target(DOUYIN_HOME)
         return {
             "ok": True,
             "hint": "已在系统 Chrome 打开抖音登录页，请用手机抖音 App 扫码登录；"
                     "登录成功后即可直接粘贴抖音链接解析下载。",
             "target_id": target_id,
         }
+
+
+def _bring_to_front(target_id: str) -> None:
+    """把既有的抖音 tab 提到最前（用户点「登录抖音」时要能一眼看到二维码）。"""
+    if not target_id:
+        return
+    ws = None
+    try:
+        ws_url = _target_ws(target_id)
+        if not ws_url:
+            return
+        ws = _WSClient(ws_url)
+        ws.send_text(json.dumps({"id": 1, "method": "Page.bringToFront"}))
+        time.sleep(0.2)
+    except Exception:
+        pass
+    finally:
+        try:
+            if ws is not None:
+                ws.sock.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
