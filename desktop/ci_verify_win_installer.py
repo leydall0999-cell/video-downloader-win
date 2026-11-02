@@ -86,6 +86,11 @@ BEST_EFFORT_ENDPOINTS = (
     "/api/sniffer/status",
 )
 
+# 抖音解析探测用的公开视频（2026-11-03 实测可解析，见 skill
+# `vdl-resolve-cookie-diag` §12.6）。换视频时确认它是公开单条视频页，
+# 别用合集/直播/私密（那三类本来就要登录，会让探测恒定失败）。
+DOUYIN_PROBE_URL = "https://www.douyin.com/video/7683799657923301297"
+
 
 # --------------------------------------------------------------------------- #
 # 小工具
@@ -147,6 +152,26 @@ def http_get(url: str, timeout: float = 3.0) -> tuple[int, str]:
     try:
         req = urllib.request.Request(
             url, headers={"User-Agent": "vdl-ci-verify/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:  # 4xx/5xx 也是「有响应」
+        try:
+            return exc.code, exc.read().decode("utf-8", "replace")
+        except Exception:
+            return exc.code, ""
+    except Exception:
+        return 0, ""
+
+
+def http_post_json(url: str, payload: dict,
+                   timeout: float = 3.0) -> tuple[int, str]:
+    """POST JSON，返回 (status_code, body)；连不上返回 (0, "")."""
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=data, method="POST",
+            headers={"User-Agent": "vdl-ci-verify/1.0",
+                     "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:  # 4xx/5xx 也是「有响应」
@@ -335,6 +360,26 @@ def main() -> int:
             rep.add("B", "runtime config dir under %APPDATA%",
                     bool(vdl_dir) and os.path.isdir(vdl_dir),
                     vdl_dir or "APPDATA unset")
+
+            # ── 抖音解析探测（2026-11-03 新增）─────────────────────────────
+            # 为什么放这里：抖音在桌面端靠**本机 Chromium 内核 + CDP 抓流**，
+            # 是「本地看着好、真机一跑就废」的高风险环节。runner 上**没装
+            # Chrome、只有系统自带 Edge**，正好是那条兜底路径的真实样本。
+            # 级别用 I（信息性）：💡 不影响 A/B/C 结论。runner 是境外机房 IP，
+            # 抖音风控可能直接不给流，失败不代表用户机器上不行；跑通则是
+            # 最硬的证据（包内 douyin_cdp + Edge + 无头，端到端出直链）。
+            d_code, d_body = http_post_json(
+                f"http://127.0.0.1:{port}/api/resolve",
+                {"url": DOUYIN_PROBE_URL}, timeout=180)
+            d_ok = any(k in d_body for k in ('"direct_url"', '"formats"',
+                                             '"video_url"'))
+            d_cat = ""
+            try:
+                d_cat = str(json.loads(d_body).get("category") or "")
+            except Exception:
+                pass
+            rep.add("I", "douyin resolve via local Edge/Chrome (info only)",
+                    d_ok, f"http={d_code} cat={d_cat or '-'} body={d_body[:160]}")
         else:
             tail = ""
             try:

@@ -265,20 +265,6 @@ jobs:
           echo "--- /api/system/info (platform 应为 windows) ---"
           curl -s --max-time 5 http://127.0.0.1:8321/api/system/info || echo "(no response)"
           echo
-          # 抖音解析真机探测（2026-11-03 加）：这是 Windows 端最容易「本地看着好、
-          # 真机一跑就废」的一环 —— 解析靠本地 Chromium 内核 + CDP 抓流，Windows
-          # 上优先 Chrome、没有则退 **系统自带 Edge**（本镜像只装 Edge，正好验这条
-          # 兜底路径）。跑的是打好的包里那份 douyin_cdp，等于端到端验证。
-          # 不阻断构建：GitHub 机房是境外 IP，抖音风控可能直接不给流，失败不代表
-          # 用户机器上不行（有时序/地域因素），所以只打印结果供人判读。
-          echo "--- 抖音解析探测（Edge 兜底 + 无头 CDP 抓流，最慢 150s）---"
-          curl -s --max-time 150 -X POST http://127.0.0.1:8321/api/resolve \
-            -H 'Content-Type: application/json' \
-            -d '{"url":"https://www.douyin.com/video/7683799657923301297"}' \
-            | head -c 800 || echo "(no response)"
-          echo
-          echo "--- 探测后 Chrome/Edge 进程（应有 msedge/chrome 被拉起过）---"
-          tasklist //FI "IMAGENAME eq msedge.exe" 2>/dev/null | head -5 || true
           taskkill //F //IM VideoDownloader.exe >/dev/null 2>&1 || true
           [ "$CODE" = "200" ] || exit 1
 
