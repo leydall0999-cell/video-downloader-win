@@ -368,9 +368,41 @@ def main() -> int:
             # 级别用 I（信息性）：💡 不影响 A/B/C 结论。runner 是境外机房 IP，
             # 抖音风控可能直接不给流，失败不代表用户机器上不行；跑通则是
             # 最硬的证据（包内 douyin_cdp + Edge + 无头，端到端出直链）。
+            #
+            # 🔴 2026-11-03 第二轮：上一轮 500（编码）修好后变成 504 超时。
+            #    要区分「机房网络到不了抖音」和「Windows 上 Edge/CDP 卡住」，
+            #    先各测一条基线：① 直连 douyin.com 的耗时/状态码；② Edge 在不在、
+            #    什么版本。两条都列进报告，免得对着 504 瞎猜。
+            _t0 = time.time()
+            dy_code, dy_body = http_get("https://www.douyin.com/", timeout=25)
+            dy_dt = time.time() - _t0
+            rep.add("I", "douyin.com reachable from runner (network baseline)",
+                    dy_code in (200, 204, 301, 302, 403),
+                    f"http={dy_code} {dy_dt:.1f}s bytes={len(dy_body)}")
+
+            edge = ""
+            for _p in (r"%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe",
+                       r"%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe"):
+                _p = os.path.expandvars(_p)
+                if os.path.isfile(_p):
+                    edge = _p
+                    break
+            chrome_bin = ""
+            for _p in (r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe",
+                       r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"):
+                _p = os.path.expandvars(_p)
+                if os.path.isfile(_p):
+                    chrome_bin = _p
+                    break
+            rep.add("I", "chromium engine available for douyin (Edge fallback)",
+                    bool(edge or chrome_bin),
+                    f"edge={edge or '-'} chrome={chrome_bin or '-'}")
+
+            _t0 = time.time()
             d_code, d_body = http_post_json(
                 f"http://127.0.0.1:{port}/api/resolve",
-                {"url": DOUYIN_PROBE_URL}, timeout=180)
+                {"url": DOUYIN_PROBE_URL}, timeout=300)
+            d_dt = time.time() - _t0
             d_ok = any(k in d_body for k in ('"direct_url"', '"formats"',
                                              '"video_url"'))
             d_cat = ""
@@ -379,7 +411,9 @@ def main() -> int:
             except Exception:
                 pass
             rep.add("I", "douyin resolve via local Edge/Chrome (info only)",
-                    d_ok, f"http={d_code} cat={d_cat or '-'} body={d_body[:160]}")
+                    d_ok,
+                    f"http={d_code} {d_dt:.1f}s cat={d_cat or '-'} "
+                    f"body={d_body[:150]}")
         else:
             tail = ""
             try:
