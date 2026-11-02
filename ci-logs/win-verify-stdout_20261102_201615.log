@@ -1,0 +1,117 @@
+2026-11-02 20:13:44,593 INFO CORS 已开启，允许来源：*
+fitz\__init__.py:17: FutureWarning: The `fitz` API is deprecated and will be removed in future. Use `import pymupdf` instead.
+  warnings.warn(
+2026-11-02 20:13:44,905 WARNING 更新源使用明文 HTTP（http://8.138.223.3:8765）。清单签名已强制启用可防篡改；仍建议尽快改为 HTTPS。
+INFO:     Started server process [6440]
+INFO:     Waiting for application startup.
+2026-11-02 20:13:45,017 WARNING [cookie_pool] 域名 baidu.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,018 WARNING [cookie_pool] 域名 bilibili.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+INFO:     Application startup complete.
+2026-11-02 20:13:45,019 WARNING [cookie_pool] 域名 chenzhongtech.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+INFO:     Uvicorn running on http://127.0.0.1:8321 (Press CTRL+C to quit)
+2026-11-02 20:13:45,019 WARNING [cookie_pool] 域名 chrqj.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,020 WARNING [cookie_pool] 域名 douyin.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,020 WARNING [cookie_pool] 域名 gifshow.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,020 WARNING [cookie_pool] 域名 iesdouyin.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,020 WARNING [cookie_pool] 域名 instagram.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,021 WARNING [cookie_pool] 域名 kuaishou.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,021 WARNING [cookie_pool] 域名 nmwchxx.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,021 WARNING [cookie_pool] 域名 qq.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,021 WARNING [cookie_pool] 域名 tiktok.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,021 WARNING [cookie_pool] 域名 xhslink.cn 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,022 WARNING [cookie_pool] 域名 xhslink.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,022 WARNING [cookie_pool] 域名 xiaohongshu.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,022 WARNING [cookie_pool] 域名 youku.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+2026-11-02 20:13:45,022 WARNING [cookie_pool] 域名 youtube.com 公共 Cookie 池已空/全部失效，网页版 chrqj 将 403，请补充 Cookie（App 端『同步 Cookie 到云端』或设 CHRQJ_COOKIE）
+INFO:     127.0.0.1:55897 - "GET /api/version HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55898 - "GET /api/system/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55899 - "GET /api/version HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55900 - "GET /api/system/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55901 - "GET /api/system/changelog HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55902 - "GET /api/tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55903 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57761 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49353 - "GET /logo.png?v=20261009a HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56453 - "GET /styles.css?v=dev1793650472722 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51366 - "GET /app.js?v=dev1793650489309&p=3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51366 - "GET /api/share/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/matting/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63314 - "GET /api/vision/providers HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61716 - "GET /api/platforms HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52437 - "GET /api/llm/providers HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/commentary/list HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51366 - "GET /api/nodes HTTP/1.1" 200 OK
+2026-11-02 20:14:50,631 INFO [cookie_pool] get domain=pan.baidu.com candidates=['pan.baidu.com', 'www.pan.baidu.com', 'baidu.com', 'www.baidu.com']
+2026-11-02 20:14:50,631 INFO [cookie_pool] get file=C:\Users\runneradmin\.videodownloader\cookie_pool\pan.baidu.com.json exists=False
+2026-11-02 20:14:50,631 INFO [cookie_pool] get file=C:\Users\runneradmin\.videodownloader\cookie_pool\www.pan.baidu.com.json exists=False
+2026-11-02 20:14:50,631 INFO [cookie_pool] get file=C:\Users\runneradmin\.videodownloader\cookie_pool\baidu.com.json exists=False
+2026-11-02 20:14:50,632 INFO [cookie_pool] get file=C:\Users\runneradmin\.videodownloader\cookie_pool\www.baidu.com.json exists=False
+2026-11-02 20:14:50,632 INFO [cookie_pool] get miss domain=pan.baidu.com
+INFO:     127.0.0.1:56038 - "GET /api/cloud-drive/credential/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63314 - "GET /api/settings/proxy HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61716 - "GET /api/system/info HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56038 - "GET /api/share/history HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/llm/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51366 - "GET /api/vision/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61716 - "GET /js/desktop-app.js?v=dev1793650489309&p=3 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61716 - "POST /api/cookie/sync/auto HTTP/1.1" 400 Bad Request
+INFO:     127.0.0.1:61716 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56038 - "GET /api/vision/managed HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63314 - "GET /api/vision/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51366 - "GET /api/llm/gateway HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/llm/local-models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61716 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51366 - "GET /api/llm/managed HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/cloud-matting/config HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55715 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59268 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64361 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58471 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49556 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49556 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49556 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49556 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49556 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49556 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49556 - "GET /api/sniffer/picked HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49556 - "GET /api/sniffer/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49556 - "GET /api/extension/update-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55905 - "POST /api/resolve HTTP/1.1" 504 Gateway Timeout
