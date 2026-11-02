@@ -499,16 +499,28 @@ def _resolve_unlocked(url: str, timeout: int = 90) -> dict:
 
 
 def close_chrome() -> None:
-    """退出本地 Chrome（App 退出时调用，释放调试端口）。"""
+    """退出本地 Chrome（App 退出时调用，释放调试端口）。
+
+    跨进程安全：Chrome 可能由上一个 App 进程启动（本进程没有其 Popen 句柄），
+    故优先用 CDP `Browser.close`（同一 profile/端口，任何进程都能关），再退本地句柄。
+    """
     proc = _PROC.get("proc")
-    if proc is None:
-        return
-    try:
-        proc.terminate()
-        proc.wait(timeout=5)
-    except Exception:
+    # 1) CDP Browser.close：跨进程生效
+    if _chrome_running():
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            ws = _WSClient(_browser_ws())
+            ws.send_text(json.dumps({"id": 1, "method": "Browser.close"}))
+            time.sleep(0.5)
         except Exception:
             pass
+    # 2) 本地句柄兜底（本进程启动的情况）
+    if proc is not None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:
+                pass
     _PROC["proc"] = None
