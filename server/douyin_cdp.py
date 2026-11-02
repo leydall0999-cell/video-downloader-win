@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import re
 import signal
@@ -33,6 +34,24 @@ import threading
 import time
 import urllib.request
 import urllib.parse
+
+_LOG = logging.getLogger("vdl.douyin_cdp")
+
+
+def _log(msg: str) -> None:
+    """打日志用这个，**别用 print**。
+
+    🔴 2026-11-03 真机 CI 实测（Windows 安装包跑 /api/resolve）：
+        500 UnicodeEncodeError: 'charmap' codec can't encode characters ...
+    根因是本模块原来用 `print("捕获视频流[1]")` —— Windows 上 sys.stdout 未必是
+    None，而可能是 **cp1252 编码的管道**（父进程用 PIPE 起进程、或输出重定向到
+    文件），中文一写就抛，整个解析 500。logging 的 handler 会自己吞掉编码异常，
+    且 App 内 uvicorn 已配好 handler ⇒ 统一走 logging，并再包一层 try/except 兜底。
+    """
+    try:
+        _LOG.info(msg)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # 常量 / 路径
@@ -867,7 +886,7 @@ def _resolve_unlocked(url: str, timeout: int = 90) -> dict:
         # 兜底：无头实例被抖音识别/拦截（极少见）时，退回有头可见实例再抓一次。
         # 只对「能连上但没抓到流」重试，登录态/没装 Chrome 这类错误重试也没意义。
         if headless and getattr(e, "category", "") in ("douyin_login_stale", "parse_failed"):
-            print("[douyin_cdp] 无头未抓到流(%s)，回退有头重试" % e.category, flush=True)
+            _log("无头未抓到流(%s)，回退有头重试" % e.category)
             try:
                 _ensure_mode(headless=False)
                 return _capture(url, timeout)
@@ -933,15 +952,15 @@ def _capture(url: str, timeout: int = 90) -> dict:
                 if kind == "video" and rurl not in videos:
                     videos.append(rurl)
                     captured_at = time.time()
-                    print("[douyin_cdp] 捕获视频流[%d]" % len(videos), flush=True)
+                    _log("捕获视频流[%d]" % len(videos))
                 elif kind == "audio" and rurl not in audios:
                     audios.append(rurl)
                     captured_at = time.time()
-                    print("[douyin_cdp] 捕获音轨流[%d]" % len(audios), flush=True)
+                    _log("捕获音轨流[%d]" % len(audios))
                 elif kind == "combined" and rurl not in combined:
                     combined.append(rurl)
                     captured_at = time.time()
-                    print("[douyin_cdp] 捕获混合流[%d]" % len(combined), flush=True)
+                    _log("捕获混合流[%d]" % len(combined))
                 # 顺手抓标题
                 if not videos and not audios and len(combined) == 0:
                     pass

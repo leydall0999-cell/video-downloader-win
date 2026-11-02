@@ -348,6 +348,18 @@ def _ensure_stdio() -> None:
     sys.std* 的代码恢复正常；有控制台时（Mac / 开发态 / CI）本函数直接返回。
     """
     if sys.stdout is not None and sys.stderr is not None and sys.stdin is not None:
+        # 🔴 2026-11-03 真机 CI 实测补的一层：**不是 None 也会炸**。
+        # Windows 上父进程用 PIPE 起我们（CI 验收脚本把 stdout 重定向到文件、
+        # 启动器/守护进程也可能这么做）时，sys.stdout 是**cp1252 编码的管道**，
+        # 任何中文 print 都抛 UnicodeEncodeError，表现为接口 500
+        # （实测 `/api/resolve` 解析抖音 500 charmap can't encode）。
+        # 强制成 UTF-8 + errors=replace：写不出就替换，永不抛异常。
+        for _name in ("stdout", "stderr"):
+            _st = getattr(sys, _name, None)
+            try:
+                _st.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
         return
     try:
         import io as _io
