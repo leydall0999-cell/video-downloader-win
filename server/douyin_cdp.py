@@ -222,6 +222,63 @@ def _page_targets() -> list[dict]:
         return []
 
 
+def _kill_by_profile() -> None:
+    """按命令行里的 `--user-data-dir=<本 profile>` 精确杀掉本模块起的浏览器。
+
+    🔴 2026-11-03 跨端补齐：原来只有 `pkill -f`，Windows 上没有 pkill ⇒
+    subprocess 抛 FileNotFoundError 被吞掉 ⇒ 杀不掉 ⇒ 僵尸浏览器越堆越多，
+    最后表现为「解析突然全部失败、端口 9341 被占」。改成平台分派：
+      · POSIX：pkill -f --user-data-dir=<PROFILE>（原逻辑不变）
+      · Windows：wmic 取命令行（Win11 24H2 已移除 wmic ⇒ 退 PowerShell 兜底），
+        再 `taskkill /F /PID`。**只杀命令行匹配本 profile 的进程**，
+        绝不 `taskkill /IM chrome.exe`（会把用户自己开着的浏览器一起关掉）。
+    """
+    if sys.platform == "win32":
+        base = os.path.basename(PROFILE.rstrip("\\/")) or "douyin-cdp-profile"
+        no_win = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        pids: list[str] = []
+        try:
+            out = subprocess.run(
+                ["wmic", "process", "where",
+                 "name='chrome.exe' or name='msedge.exe' or name='brave.exe'",
+                 "get", "processid,commandline", "/format:csv"],
+                capture_output=True, text=True, timeout=10, creationflags=no_win)
+            for line in (out.stdout or "").splitlines():
+                if base.lower() in line.lower():
+                    tail = line.rsplit(",", 1)[-1].strip()
+                    if tail.isdigit():
+                        pids.append(tail)
+        except Exception:
+            pass
+        if not pids:
+            ps = (
+                "Get-CimInstance Win32_Process | "
+                "Where-Object { $_.CommandLine -and "
+                "($_.CommandLine -like '*__BASE__*') } | "
+                "ForEach-Object { $_.ProcessId }".replace("__BASE__", base))
+            try:
+                out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                                     capture_output=True, text=True, timeout=20,
+                                     creationflags=no_win)
+                pids = [x.strip() for x in (out.stdout or "").splitlines()
+                        if x.strip().isdigit()]
+            except Exception:
+                pass
+        for pid in pids:
+            try:
+                subprocess.run(["taskkill", "/F", "/PID", pid],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=10, creationflags=no_win)
+            except Exception:
+                pass
+        return
+    try:
+        subprocess.run(["pkill", "-f", "--user-data-dir=%s" % PROFILE],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def _kill_chrome() -> None:
     """关掉本 profile 的 Chrome（先走 CDP，再兜底按命令行杀）。
 
@@ -242,11 +299,7 @@ def _kill_chrome() -> None:
             break
         time.sleep(0.5)
     if _chrome_running():
-        try:
-            subprocess.run(["pkill", "-f", "--user-data-dir=%s" % PROFILE],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
+        _kill_by_profile()
         for _ in range(10):
             if not _chrome_running():
                 break
@@ -1017,8 +1070,13 @@ def close_chrome() -> None:
             proc.terminate()
             proc.wait(timeout=5)
         except Exception:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except Exception:
-                pass
+            # 🔴 os.getpgid/os.killpg 是 POSIX-only，Windows 上直接 AttributeError
+            # ⇒ Windows 用「按 profile 精确 taskkill」兜底。
+            if sys.platform == "win32":
+                _kill_by_profile()
+            else:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
     _PROC["proc"] = None
