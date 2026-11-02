@@ -3245,12 +3245,17 @@ def _douyin_info(url: str, cookie: str = "") -> dict[str, Any]:
                 category=getattr(_e, "category", None) or "parse_failed",
             ) from _e
         raise
+    return _shape_douyin_info(data, url)
+
+
+def _shape_douyin_info(data: dict[str, Any], url: str) -> dict[str, Any]:
+    """把 worker / 本地 CDP 返回的 data dict 构造成 yt-dlp 兼容的 info dict。"""
     headers = {"Referer": "https://www.douyin.com/", "User-Agent": _DOUYIN_UA}
     video_url = data.get("video_url") or ""
     audio_url = data.get("audio_url") or ""
     video_has_audio = bool(data.get("video_has_audio"))
     if not video_url:
-        raise ResolveError("抖音解析失败", "worker 未返回视频流", category="parse_failed")
+        raise ResolveError("抖音解析失败", "未返回视频流", category="parse_failed")
     # 混合轨（视频自带音轨）：单直链下载，绝不构造分离 format（避免无谓合并/双音轨）
     if video_has_audio or not audio_url:
         return {
@@ -3305,6 +3310,18 @@ def _douyin_info(url: str, cookie: str = "") -> dict[str, Any]:
         "formats": formats,
         "http_headers": dict(headers),
     }
+
+
+def _douyin_info_local(url: str) -> dict[str, Any]:
+    """桌面端抖音解析：本地系统 Chrome + CDP 捕获真实流（破 Argus Layer2 设备指纹）。
+
+    服务器侧 VPS worker 拿不到与登录态绑定的设备指纹，永远卡 Layer2「Uifid Not Found」，
+    已实弹证伪；桌面端用真实 Chrome 指纹 + 用户登录态是唯一活路。未登录 / 无 Chrome /
+    未捕获到流时抛 ResolveError（category 透传给前端做对应引导）。
+    """
+    import douyin_cdp
+    data = douyin_cdp.resolve(url)
+    return _shape_douyin_info(data, url)
 
 # 快手（kuaishou.com）：SSR 无设备指纹 Cookie 时 __APOLLO_STATE__ 为空，纯 requests
 # 拿不到主视频数据；改走 VPS Playwright 解析（kuaishou_resolve.py），返回合并好的
@@ -5892,8 +5909,11 @@ def _probe_impl(url: str, cookie: str = "", proxy: str = "") -> dict[str, Any]:
             "另：腾讯视频的会员专享内容受版权保护，无法下载；免费集可以正常解析。",
             category="unsupported_url_form",
         )
-    # 抖音/快手/微博/爱奇艺：yt-dlp 提取器失效或分享页 JS-only，走 VPS Playwright 真实浏览器解析
+    # 抖音：桌面端走本地 Chrome+CDP 破 Argus（服务器侧 VPS worker 永远卡 Layer2 设备指纹，
+    # 已实弹证伪）；web 版（cloud）无系统 Chrome，仍走 worker 但基本不可解，靠前端引导桌面端。
     if _is_douyin_host(host):
+        if os.environ.get("VDL_INSTANCE") != "cloud":
+            return _douyin_info_local(url)
         return _douyin_info(url, cookie=cookie)
     # DAZN：认证墙 + Widevine DRM + 地区封锁（2026-08-22 深度评估），明确提示
     if "dazn.com" in (host or ""):

@@ -392,6 +392,16 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 .btn-batch .batch-icon { transition: transform .2s; }
 .btn-batch.is-open .batch-icon { transform: rotate(180deg); }
 
+/* 抖音登录按钮（桌面端破 Argus 设备指纹风控的唯一入口） */
+.btn-douyin-login {
+  min-height: 52px; padding: 0 1.1rem; font-size: .92rem; font-weight: 600;
+  color: #fff; background: linear-gradient(135deg, #25F4EE 0%, #FE2C55 100%);
+  border: none; box-shadow: 0 6px 16px rgba(254, 44, 85, .22);
+  display: inline-flex; align-items: center; gap: .4rem;
+}
+.btn-douyin-login:hover:not(:disabled) { filter: brightness(1.05); }
+.btn-douyin-login .dy-ic { font-size: 1.05rem; }
+
 .spinner {
   width: 15px; height: 15px; border-radius: 50%; display: none;
   border: 2px solid rgba(255, 255, 255, .45); border-top-color: #fff;

@@ -139,6 +139,7 @@
     input: $('urlInput'),
     clearBtn: $('clearBtn'),
     resolveBtn: $('resolveBtn'),
+    douyinLoginBtn: $('douyinLoginBtn'),
     alert: $('alertBox'),
     alertIcon: $('alertIcon'),
     alertBody: $('alertBody'),
@@ -1688,6 +1689,32 @@
     return null;
   };
 
+  /** 桌面端抖音扫码登录：打开系统 Chrome 登录页 → 轮询登录态 → 提示重试。
+   *  抖音已升级 Argus 设备指纹风控，必须用真实 Chrome + 登录态才能解析，
+   *  服务器侧无解（详见 douyin_cdp.py 注释）。 */
+  const douyinLoginAndPoll = async () => {
+    if (!isDesktopShell()) {
+      showToast('网页版不支持抖音扫码登录，请使用桌面端 App', 4000, 'err');
+      return;
+    }
+    try {
+      await request('/api/douyin/login', { method: 'POST', body: '{}', timeout: 30000 }, '');
+      showToast('已在系统 Chrome 打开抖音登录页，请用手机抖音 App 扫码登录', 6000);
+      let ok = false;
+      for (let i = 0; i < 24; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const st = await request('/api/douyin/login-status', { method: 'GET' }, '');
+          if (st && st.logged_in) { ok = true; break; }
+        } catch (_) { /* 单次失败忽略 */ }
+      }
+      if (ok) showToast('抖音已登录 ✅ 现在粘贴抖音链接即可解析下载', 5000);
+      else showToast('尚未检测到登录态，请完成手机扫码登录后重试（登录页仍开着）', 5000, 'err');
+    } catch (e) {
+      showToast('打开抖音登录页失败：' + ((e && e.message) || '未知错误'), 5000, 'err');
+    }
+  };
+
   const showError = (message, hint = '', detail = '', category = '') => {
     let msg = String(message || '').trim();
     let h = String(hint || '').trim();
@@ -1701,8 +1728,8 @@
     // network / restricted / unknown 等），让同一个横幅对不同错误给出不同引导，
     // 而不是千篇一律的「解析失败」。
     const cat = String(category || '').trim();
-    const ICON = { cookie_required: '🔑', cookie_invalid_or_expired: '🔑', cdn_forbidden: '🚫', restricted: '🔒', network: '🌐' };
-    const ACCENT = { cookie_required: '#e0a33a', cookie_invalid_or_expired: '#e0a33a', cdn_forbidden: '#e2554f', restricted: '#9aa0a6', network: '#4a90d9' };
+    const ICON = { cookie_required: '🔑', cookie_invalid_or_expired: '🔑', cdn_forbidden: '🚫', restricted: '🔒', network: '🌐', douyin_login_required: '🎵', douyin_no_chrome: '🌐' };
+    const ACCENT = { cookie_required: '#e0a33a', cookie_invalid_or_expired: '#e0a33a', cdn_forbidden: '#e2554f', restricted: '#9aa0a6', network: '#4a90d9', douyin_login_required: '#FE2C55' };
     // 先重置上一次的分类样式，避免串台
     el.alert.className = 'alert';
     el.alert.style.borderLeftColor = '';
@@ -1711,7 +1738,12 @@
     // cookie 类错误：给一个「去粘贴 Cookie」按钮，一键展开高级选项并聚焦输入框
     if (el.alertAction) {
       const isCookie = cat === 'cookie_required' || cat === 'cookie_invalid_or_expired';
-      if (isCookie) {
+      if (cat === 'douyin_login_required') {
+        el.alertAction.textContent = '去登录抖音';
+        el.alertAction.hidden = false;
+        el.alertAction.style.cssText = 'margin-top:.5rem;padding:.35rem .7rem;border:none;border-radius:6px;background:#FE2C55;color:#fff;font-size:12px;font-weight:600;cursor:pointer;';
+        el.alertAction.onclick = () => { douyinLoginAndPoll(); };
+      } else if (isCookie) {
         // 登录态已失效 → 清掉本机记忆的 Cookie，避免下次继续带着失效值重试
         if (cat === 'cookie_invalid_or_expired') {
           try { localStorage.removeItem('vdl_cookie'); } catch (e) {}
@@ -16790,6 +16822,25 @@ el.dwVidPlayer.hidden = true;
   const toggleClearButton = () => { el.clearBtn.hidden = el.input.value.length === 0; };
 
   el.form.addEventListener('submit', handleResolve);
+  // 抖音扫码登录入口（仅桌面端）：抖音已升级 Argus 设备指纹风控，服务器侧无解，
+  // 必须用系统真实 Chrome + 用户登录态才能解析下载（详见 douyin_cdp.py）。
+  if (el.douyinLoginBtn) {
+    const _isDesk = isDesktopShell();
+    el.douyinLoginBtn.hidden = !_isDesk;
+    if (_isDesk) {
+      el.douyinLoginBtn.addEventListener('click', douyinLoginAndPoll);
+      // 首次挂载顺带同步一次登录态文案（已登录则显示「抖音已登录」）
+      (async () => {
+        try {
+          const st = await request('/api/douyin/login-status', { method: 'GET' }, '');
+          if (st && st.logged_in) {
+            const lbl = el.douyinLoginBtn.querySelector('[data-page-node-id="dyLoginLabel"]');
+            if (lbl) lbl.textContent = '抖音已登录';
+          }
+        } catch (_) { /* 登录态查询失败不影响按钮使用 */ }
+      })();
+    }
+  }
   // 下载类型切换（视频 / 图片，2026-10-12 图片下载 P0）
   if (el.modeVideoBtn) el.modeVideoBtn.addEventListener('click', () => setDownloadMode('video'));
   if (el.modeImageBtn) el.modeImageBtn.addEventListener('click', () => setDownloadMode('image'));

@@ -240,6 +240,36 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
         raise app.HTTPException(status_code=504, detail=detail) from None
     return {'url': url, 'platform': {'key': platform.key, 'name': platform.name}, 'video': app.downloader.summarize(info), 'qualities': app.downloader.build_quality_options(info), 'sources': []}
 
+
+@router.post('/api/douyin/login')
+async def douyin_login(request: app.Request) -> dict:
+    """打开系统 Chrome 到抖音登录页（展示二维码），用户在手机抖音 App 扫码登录。
+
+    仅在桌面端可用；web 版（cloud）无系统 Chrome，直接拒绝。
+    """
+    if app.os.environ.get('VDL_INSTANCE') == 'cloud':
+        raise app.HTTPException(status_code=400, detail="网页版不支持抖音扫码登录，请使用桌面端 App")
+    try:
+        import douyin_cdp
+        return douyin_cdp.open_login_page()
+    except app.HTTPException:
+        raise
+    except Exception as _e:  # noqa: BLE001
+        raise app.HTTPException(status_code=500, detail="打开 Chrome 失败：%s" % _e) from _e
+
+
+@router.get('/api/douyin/login-status')
+async def douyin_login_status(request: app.Request) -> dict:
+    """返回桌面端抖音登录态（独立 profile 是否已登录抖音）。"""
+    if app.os.environ.get('VDL_INSTANCE') == 'cloud':
+        return {'logged_in': False, 'cloud': True}
+    try:
+        import douyin_cdp
+        return {'logged_in': bool(douyin_cdp.is_logged_in())}
+    except Exception:  # noqa: BLE001
+        return {'logged_in': False}
+
+
 def _download_gate_error(request) -> str | None:
     """下载配额门（2026-09-06）：免费 10 次/日 → 会员 1000 次/日。放行返回 None，否则返回引导文案。
     按请求用户态取 store（登录用户用其自身会员；匿名用全局免费档）。"""
