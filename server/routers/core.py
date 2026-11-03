@@ -108,6 +108,50 @@ def node_info() -> dict:
     caps = app.plat.node_capabilities()
     return {k: v for k, v in info.items() if k not in app.plat.NODE_GROUPS or k in caps}
 
+# 桌面端解析遥测回写（2026-11-03 第 3 步）：App 解析成功/失败异步 POST 到云端
+# /api/telemetry/report，写与网页版同源的 ECS 本机日志，平台健康巡检零改动即可
+# 消费主力端数据。仅联网模式（VDL_CLOUD_LINK!=0）上报；测试/离线环境静默跳过。
+# 隐私：只发 host（绝不带 URL/标题），与网页版 record_success/record_demand 同口径。
+def report_telemetry_async(host: str, key: str = "", kind: str = "resolve_ok",
+                          category: str = "", url: str = "") -> None:
+    import os
+    if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("VDL_OFFLINE_TESTS"):
+        return
+    if (os.environ.get("VDL_CLOUD_LINK", "1") or "1").strip() == "0":
+        return
+    h = (host or "").strip().lower()
+    if not h or "/" in h or " " in h or "." not in h:
+        return
+    try:
+        import json
+        import threading
+        import urllib.request
+
+        def _run() -> None:
+            try:
+                import urllib.error
+                base = (os.environ.get("VDL_TELEMETRY_BASE")
+                        or "https://hanyuxz.top").rstrip("/")
+                body = {"kind": kind, "host": h[:64], "key": (key or "")[:64]}
+                if kind == "resolve_fail":
+                    body["category"] = (category or "unsupported_platform")[:40]
+                    body["url"] = (url or "")[:200]
+                data = json.dumps(body).encode("utf-8")
+                req = urllib.request.Request(
+                    base + "/api/telemetry/report", data=data,
+                    headers={"Content-Type": "application/json"})
+                tok = (os.environ.get("VDL_TELEMETRY_TOKEN") or "").strip()
+                if tok:
+                    req.add_header("X-Telemetry-Token", tok)
+                urllib.request.urlopen(req, timeout=8).read()
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_run, daemon=True, name="vdl-telemetry").start()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @router.post('/api/resolve')
 async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
     # 2026-09-06 优化：解析不再设配额墙（解析预览放开，会员墙挪到「点清晰度下载」处）
@@ -237,7 +281,13 @@ async def resolve(payload: app.ResolveRequest, request: app.Request) -> dict:
             detail = f'YouTube 解析超时（超过 {timeout} 秒）。常见原因：①代理速度慢或不稳定（YouTube 需要拉取 player.js 签名，代理延迟会叠加）；②该视频可能受限（地区/年龄限制）；建议：①检查代理是否通畅；②稍后重试；③若持续失败，尝试更换节点或关闭代理直连'
         else:
             detail = f'解析超时（超过 {timeout} 秒）。常见原因：①视频本身受限（限免/会员专享/付费/地区限制，这类通常需登录 cookie 才能拿到真实流，请到右上角「高级选项」粘贴浏览器 Cookie 后重试）；②当前网络无法访问该平台（可尝试在「高级选项」设置代理）'
+        report_telemetry_async(host, getattr(platform, 'key', ''), "resolve_fail", category="timeout")
         raise app.HTTPException(status_code=504, detail=detail) from None
+    except Exception as _telexc:
+        # 解析失败（非超时类）：旁路上报云端，再原样抛出（不影响错误响应）
+        report_telemetry_async(host, getattr(platform, 'key', ''), "resolve_fail", category="error")
+        raise
+    report_telemetry_async(host, getattr(platform, 'key', ''), "resolve_ok")
     return {'url': url, 'platform': {'key': platform.key, 'name': platform.name}, 'video': app.downloader.summarize(info), 'qualities': app.downloader.build_quality_options(info), 'sources': []}
 
 
