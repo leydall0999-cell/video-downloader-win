@@ -2217,6 +2217,66 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
   /* 2026-09-08 header 同步偏移 200px：header 的 .wrap 与 main 的 .wrap 必须同基准居中，
      否则右上角「会员中心」按钮右缘与下方卡片右缘错开 ~100px（main 有 margin-left 而 header 没有） */
   .site-header { padding-left: 200px; }
+
+  /* ===== 2026-11-03 左侧导航「向左收起」 =====
+     状态挂在 <html> 的 .sidebar-collapsed（head 内联脚本提前套用，刷新不闪）。
+     侧栏整体 translateX(-100%) 滑出，main / header 的 200px 让位同步归零；
+     收起后贴左边缘的 .sidebar-reopen 小拉手是唯一展开出口。 */
+  /* 收起按钮改为浮层后不再占 flex 行；顶部内距让给浮标，首页按钮位置基本不变 */
+  .sidebar { transition: transform .24s ease; padding-top: 2.9rem; }
+  html.sidebar-collapsed .sidebar {
+    transform: translateX(-100%);
+    pointer-events: none;
+  }
+  main#main, .site-header {
+    transition: margin-left .24s ease, padding-left .24s ease;
+  }
+  html.sidebar-collapsed main#main { margin-left: 0; }
+  html.sidebar-collapsed .site-header { padding-left: 0; }
+
+  /* 侧栏右上角：纯线条收起图标（三横线，中间一条为左箭头）。
+     位于首页按钮上方的顶部留白区内、与首页按钮不叠压；absolute 不占 flex 行 →
+     不挤压首页按钮高度（避免被压扁）；随 .sidebar 一起滑出。 */
+  .sidebar-collapse-bar {
+    position: absolute;
+    top: .55rem;
+    right: .5rem;
+    display: flex; justify-content: flex-end;
+    padding: 0; margin: 0;
+  }
+  .sidebar-collapse-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; padding: 0;
+    border: 0; border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    transition: color .18s ease;
+  }
+  .sidebar-collapse-btn:hover { color: var(--brand); }
+  .sidebar-collapse-btn svg { display: block; width: 20px; height: 20px; }
+  /* 保险：矮窗口下首页按钮不被 flex 压扁 */
+  .sidebar-item.sidebar-home { flex-shrink: 0; }
+
+  /* 收起后贴左边缘的展开小拉手 */
+  .sidebar-reopen {
+    display: none;
+    position: fixed; left: 0; top: 76px; z-index: 12;
+    width: 26px; height: 46px;
+    align-items: center; justify-content: center;
+    padding: 0;
+    border: 1px solid var(--line); border-left: 0;
+    border-radius: 0 10px 10px 0;
+    background: rgba(255,255,255,.9);
+    color: var(--brand);
+    font: inherit; font-size: 1rem; font-weight: 700; line-height: 1;
+    cursor: pointer;
+    box-shadow: 2px 2px 8px rgba(15,23,42,.12);
+    transition: background .18s ease, width .18s ease;
+  }
+  html.sidebar-collapsed .sidebar-reopen { display: flex; }
+  .sidebar-reopen:hover { background: var(--brand-soft, #eef0ff); width: 30px; }
+  .sidebar-reopen > span[aria-hidden="true"] { pointer-events: none; }
 }
 
 /* ---------------- 媒体库（桌面版功能） ---------------- */
@@ -2227,6 +2287,8 @@ textarea::placeholder { color: #b8c2d2; opacity: 1; }
 @media (max-width: 900px) {
   /* 移动端：保留原顶部 tabs（上一版修复），隐藏侧栏 */
   .sidebar { display: none !important; }
+  /* 窄屏没有侧栏，收起态小拉手也必须藏起来，避免露馅 */
+  .sidebar-reopen { display: none !important; }
 }
 
 .tabs {
@@ -7590,3 +7652,14 @@ html.theme-dark .uc-bulk { background: var(--bg-card, #23252c); border-color: va
 .cd-hint { margin: 0 0 .6rem; font-size: .8rem; line-height: 1.6; color: var(--text-mute); }
 .cd-cred-actions { display: flex; align-items: center; gap: .6rem; margin-top: .5rem; }
 .cd-cred-state { font-size: .78rem; color: var(--text-mute); }
+
+/* ===== 2026-11-03 左侧导航收起按钮 / 展开小拉手（深色） ===== */
+html.theme-dark .sidebar-collapse-btn {
+  background: transparent; color: var(--text);
+}
+html.theme-dark .sidebar-collapse-btn:hover { color: var(--brand); }
+html.theme-dark .sidebar-reopen {
+  background: #20232b; color: var(--brand); border-color: var(--line);
+  box-shadow: 2px 2px 8px rgba(0,0,0,.35);
+}
+html.theme-dark .sidebar-reopen:hover { background: #2a2e38; }

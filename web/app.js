@@ -26577,3 +26577,32 @@ el.dwVidPlayer.hidden = true;
     });
   });
 })();
+
+// ===== 2026-11-03 左侧导航「向左收起 / 展开」=====
+// 视觉状态全由 <html>.sidebar-collapsed + CSS 驱动（index.html 的 head 内联脚本提前套用，
+// 刷新不闪）；这里只负责切换、持久化与无障碍属性。独立 IIFE：不受主 IIFE 中途异常影响。
+(function () {
+  var KEY = 'vdl-sidebar-collapsed';
+  var root = document.documentElement;
+  var collapseBtn = document.getElementById('sidebarCollapseBtn');
+  var reopenBtn = document.getElementById('sidebarReopenBtn');
+  var sidebar = document.getElementById('sidebar');
+
+  function sync() {
+    var collapsed = root.classList.contains('sidebar-collapsed');
+    if (collapseBtn) collapseBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    if (reopenBtn) reopenBtn.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
+    if (sidebar) {
+      if (collapsed) sidebar.setAttribute('aria-hidden', 'true');
+      else sidebar.removeAttribute('aria-hidden');
+    }
+  }
+  function setCollapsed(c) {
+    root.classList.toggle('sidebar-collapsed', !!c);
+    try { localStorage.setItem(KEY, c ? '1' : '0'); } catch (e) { /* 隐私模式忽略 */ }
+    sync();
+  }
+  if (collapseBtn) collapseBtn.addEventListener('click', function () { setCollapsed(true); });
+  if (reopenBtn) reopenBtn.addEventListener('click', function () { setCollapsed(false); });
+  sync();
+})();

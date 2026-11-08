@@ -29,6 +29,16 @@
     } catch (e) {}
   })();
 </script>
+<script>
+  // 左侧导航「收起」状态：body 解析前就套用，避免刷新时先展开再滑走闪一下。
+  // 视觉全由 CSS 的 html.sidebar-collapsed 驱动，这里只负责提前挂 class。
+  (function () {
+    try {
+      if (localStorage.getItem('vdl-sidebar-collapsed') === '1')
+        document.documentElement.classList.add('sidebar-collapsed');
+    } catch (e) {}
+  })();
+</script>
 </head>
 <body data-page-node-id="a4OZT83L9hBtO8loxwXlfl">
 <a class="skip-link" href="#main" data-page-node-id="nACuRUEKE1CfOZ8WMYEwcb">跳到主要内容</a>
@@ -56,6 +66,24 @@
   <div class="wrap" data-page-node-id="xDbJZJ5a3KE8NpaITruDJS">
 
   <aside class="sidebar" id="sidebar" aria-label="主导航" data-page-node-id="rwPeIUh7iuKSgBIJwsEwRq">
+    <!-- 2026-11-03 左侧导航「向左收起」：点一下整条 sidebar 滑出屏幕、主内容铺满；
+         收起后由贴左边缘的小拉手 #sidebarReopenBtn 重新展开（状态存 localStorage）。 -->
+    <div class="sidebar-collapse-bar" data-page-node-id="sbCollapseBar2026a">
+      <button type="button" class="sidebar-collapse-btn" id="sidebarCollapseBtn"
+              title="向左收起左侧导航" aria-label="向左收起左侧导航"
+              aria-controls="sidebar" aria-expanded="true"
+              data-page-node-id="sbCollapseBtn2026a">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true" data-page-node-id="sbCollapseIcon2026a">
+          <line x1="4" y1="6" x2="20" y2="6"/>
+          <path d="M20 12 H4"/>
+          <path d="M7 9 L4 12 L7 15"/>
+          <line x1="4" y1="18" x2="20" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
     <!-- 2026-08-29 删掉原 .sidebar-brand（紫色 dot + VideoDownloader 大字）——
          app 名已在 macOS 顶菜单/Dock/窗口 title/主面板区头共 4 处展示，
          侧栏职责是导航，不是品牌展示，重复占用 50-60px 高度无价值 -->
@@ -160,6 +188,13 @@
 
     <div class="sidebar-footer" data-page-node-id="VSgF4jsYHcTSi7xz1jgzDi">v1.0 · AI 自动剪辑</div>
   </aside>
+
+  <!-- 收起态唯一出口：贴屏幕左边缘的小拉手，点一下把导航拉回来。
+       显隐完全由 html.sidebar-collapsed 的 CSS 控制，窄屏（≤900px）强制隐藏。 -->
+  <button type="button" class="sidebar-reopen" id="sidebarReopenBtn"
+          title="展开左侧导航" aria-label="展开左侧导航"
+          aria-controls="sidebar" aria-expanded="false"
+          data-page-node-id="sbReopenBtn2026a"><span aria-hidden="true">&#187;</span></button>
 
   <!-- 窄屏（≤900px）回退：保留原顶部 tabs，避免侧栏挤死移动端 -->
   <nav class="tabs" id="tabs" hidden data-page-node-id="3w9bffwxpAt8QzMgqmhG14">
