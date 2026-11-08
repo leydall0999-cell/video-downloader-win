@@ -187,8 +187,13 @@ open(path + ".sig", "wb").write(base64.b64encode(key.sign(raw)))
 PY
 then
   echo "   ✔ 已生成签名 latest-win.json.sig"
+elif command -v openssl >/dev/null 2>&1 && openssl pkeyutl -sign -inkey "$SIGN_KEY" -rawin -in "$MANIFEST" -out "$SIG" 2>/dev/null; then
+  # Windows 上没有 cryptography 时走 openssl（Ed25519 + raw 输入，等价于上面的 python 逻辑）
+  base64 -w0 < "$SIG" > "$SIG.b64" 2>/dev/null || openssl base64 -A -in "$SIG" -out "$SIG.b64"
+  mv "$SIG.b64" "$SIG"
+  echo "   ✔ 已生成签名 latest-win.json.sig（openssl 通道）"
 else
-  echo "✗ 签名生成失败（cryptography 是否可用？用的是 $(basename "$PY")）"
+  echo "✗ 签名生成失败（cryptography 与 openssl 均不可用，用的是 $(basename "$PY")）"
   exit 1
 fi
 
@@ -205,7 +210,11 @@ fi
 scp -o BatchMode=yes "$MANIFEST" "$SIG" "$VPS_HOST:$VPS_DIR/" >/dev/null
 echo "   ✔ 已上传到 $VPS_HOST:$VPS_DIR/"
 
-local_sha="$(shasum -a 256 "$MANIFEST" | awk '{print $1}')"
+if command -v shasum >/dev/null 2>&1; then
+  local_sha="$(shasum -a 256 "$MANIFEST" | awk '{print $1}')"
+else
+  local_sha="$(sha256sum "$MANIFEST" | awk '{print $1}')"  # Windows/Git-Bash 没有 shasum
+fi
 # ⚠️ awk 留在本地管道里：写进 ssh 的远程命令时 \$1 的转义在 macOS bash 下会被吃掉
 remote_sha="$(ssh -o BatchMode=yes "$VPS_HOST" "sha256sum $VPS_DIR/latest-win.json" | awk '{print $1}')"
 [ "$local_sha" = "$remote_sha" ] || { echo "✗ 线上清单与本地不一致（$remote_sha ≠ $local_sha）"; exit 1; }
